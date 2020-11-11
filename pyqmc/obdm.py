@@ -221,7 +221,7 @@ class OBDMAccumulator:
         wrap = prim_wrap + np.dot(configs.wrap, self.supercell.S)
         wrap = wrap.reshape(-1, 3)
         prim_coords = prim_coords.reshape(-1, 3)
-        kdotR = np.linalg.multi_dot((self._kpts, lvecs.T, wrap.T))
+        kdotR = np.einsum("ij,kj,lk->il", self._kpts, lvecs, wrap)
         wrap_phase = self.get_wrapphase(kdotR)
         # evaluate AOs for all electron positions
         ao = self._mol.eval_gto("PBCGTOval_sph", prim_coords, kpts=self._kpts)

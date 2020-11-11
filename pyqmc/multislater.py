@@ -51,6 +51,7 @@ class MultiSlater:
 
     def __init__(self, mol, mf, mc, tol=None, freeze_orb=None):
         self.tol = -1 if tol is None else tol
+        self.real_tol = 1e4
         self.parameters = {}
         self._mol = mol
         if hasattr(mc, "nelecas"):
@@ -132,12 +133,11 @@ class MultiSlater:
 
         nconf, nelec, ndim = configs.configs.shape
         mycoords = configs.configs.reshape((nconf * nelec, ndim))
-        ao = np.real_if_close(
-            self._mol.eval_gto(self.pbc_str + "GTOval_sph", mycoords).reshape(
-                (nconf, nelec, -1)
-            ),
-            tol=1e4,
+        ao = self._mol.eval_gto(self.pbc_str + "GTOval_sph", mycoords).reshape(
+            (nconf, nelec, -1)
         )
+        if np.all(ao.imag < self.real_tol * np.finfo(float).eps):
+            ao = np.real(ao)
 
         self._aovals = ao
         self._dets = []
@@ -164,9 +164,9 @@ class MultiSlater:
         if mask is None:
             mask = [True] * epos.configs.shape[0]
         eeff = e - s * self._nelec[0]
-        ao = np.real_if_close(
-            self._mol.eval_gto(self.pbc_str + "GTOval_sph", epos.configs), tol=1e4
-        )
+        ao = self._mol.eval_gto(self.pbc_str + "GTOval_sph", epos.configs)
+        if np.all(ao.imag < self.real_tol * np.finfo(float).eps):
+            ao = np.real(ao)
         self._aovals[:, e, :] = ao
         mo = ao.dot(self.parameters[self._coefflookup[s]])
 
@@ -246,9 +246,9 @@ class MultiSlater:
         Note that this can be called even if the internals have not been updated for electron e,
         if epos differs from the current position of electron e."""
         s = int(e >= self._nelec[0])
-        aograd = np.real_if_close(
-            self._mol.eval_gto("GTOval_sph_deriv1", epos.configs), tol=1e4
-        )
+        aograd = self._mol.eval_gto("GTOval_sph_deriv1", epos.configs)
+        if np.all(aograd.imag < self.real_tol * np.finfo(float).eps):
+            aograd = np.real(aograd)
         mograd = aograd.dot(self.parameters[self._coefflookup[s]])
         mograd_vals = mograd[:, :, self._det_occup[s]]
 
@@ -258,12 +258,11 @@ class MultiSlater:
     def laplacian(self, e, epos):
         """ Compute the laplacian Psi/ Psi. """
         s = int(e >= self._nelec[0])
-        ao = np.real_if_close(
-            self._mol.eval_gto(self.pbc_str + "GTOval_sph_deriv2", epos.configs)[
-                [0, 4, 7, 9]
-            ],
-            tol=1e4,
-        )
+        ao = self._mol.eval_gto(self.pbc_str + "GTOval_sph_deriv2", epos.configs)[
+            [0, 4, 7, 9]
+        ]
+        if np.all(ao.imag < self.real_tol * np.finfo(float).eps):
+            ao = np.real(ao)
         molap = np.dot(
             [ao[0], ao[1:].sum(axis=0)], self.parameters[self._coefflookup[s]]
         )
@@ -274,12 +273,11 @@ class MultiSlater:
 
     def gradient_laplacian(self, e, epos):
         s = int(e >= self._nelec[0])
-        ao = np.real_if_close(
-            self._mol.eval_gto(self.pbc_str + "GTOval_sph_deriv2", epos.configs)[
-                [0, 1, 2, 3, 4, 7, 9]
-            ],
-            tol=1e4,
-        )
+        ao = self._mol.eval_gto(self.pbc_str + "GTOval_sph_deriv2", epos.configs)[
+            [0, 1, 2, 3, 4, 7, 9]
+        ]
+        if np.all(ao.imag < self.real_tol * np.finfo(float).eps):
+            ao = np.real(ao)
         ao = np.concatenate([ao[0:4], ao[4:].sum(axis=0, keepdims=True)])
         mo = np.dot(ao, self.parameters[self._coefflookup[s]])
         mo_vals = mo[:, :, self._det_occup[s]]

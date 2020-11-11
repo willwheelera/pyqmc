@@ -34,7 +34,7 @@ def get_supercell(cell, S):
         possible_pts = np.dot(np.stack([x.ravel() for x in mesh]).T, Sinv.T)
         in_unit_box = (possible_pts >= 0) * (possible_pts < 1 - 1e-12)
         select = np.where(np.all(in_unit_box, axis=1))[0]
-        return np.linalg.multi_dot((possible_pts[select], S, latvec))
+        return np.einsum("ij,jk,kl->il", possible_pts[select], S, latvec)
 
     scale = np.abs(int(np.round(np.linalg.det(S))))
     superlattice = np.dot(S, cell.lattice_vectors())

@@ -64,7 +64,8 @@ class MultiSlaterPBC:
                     mca = mf.mo_coeff[s][kind][:, : maxorb[s][kind]]
                 else:
                     mca = mf.mo_coeff[kind][:, : maxorb[s][kind]]
-                mca = np.real_if_close(mca, tol=self.real_tol)
+                if np.all(mca.imag < self.real_tol * np.finfo(float).eps):
+                    mca = np.real(mca)
                 mclist.append(mca / np.sqrt(self.nk))
             self.param_split[lookup] = np.cumsum([m.shape[1] for m in mclist])
             self.parameters[lookup] = np.concatenate(mclist, axis=-1)
@@ -105,7 +106,7 @@ class MultiSlaterPBC:
         prim_coords, prim_wrap = pbc.enforce_pbc(self._mol.lattice_vectors(), mycoords)
         configswrap = configswrap.reshape(prim_wrap.shape)
         wrap = prim_wrap + np.dot(configswrap, self.supercell.S)
-        kdotR = np.linalg.multi_dot((self._kpts, self._mol.lattice_vectors().T, wrap.T))
+        kdotR = np.einsum("ij,kj,lk->il", self._kpts, self._mol.lattice_vectors(), wrap)
         wrap_phase = self.get_wrapphase(kdotR)
         # evaluate AOs for all electron positions
         ao = self._mol.eval_gto(eval_str, prim_coords, kpts=self._kpts)

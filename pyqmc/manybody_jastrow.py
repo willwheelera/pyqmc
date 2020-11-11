@@ -149,23 +149,26 @@ class J3:
         coords = configs.configs[mask].reshape((-1, 3))
         nconf = np.sum(mask)
         nelec = int(coords.shape[0] / nconf)
+        real_tol = 1e4
 
         if mode == "val":
-            ao = np.real_if_close(self.mol.eval_gto("GTOval_cart", coords), tol=1e4)
+            ao = self.mol.eval_gto("GTOval_cart", coords)
+            if np.all(ao.imag < np.finfo(float).eps * real_tol):
+                ao = np.real(ao)
             if nelec == 1:
                 return ao.reshape((nconf, -1))
             return ao.reshape((nconf, nelec, -1))
         elif mode == "grad":
-            ao = np.real_if_close(
-                self.mol.eval_gto("GTOval_cart_deriv1", coords), tol=1e4
-            )
+            ao = self.mol.eval_gto("GTOval_cart_deriv1", coords)
+            if np.all(ao.imag < np.finfo(float).eps * real_tol):
+                ao = np.real(ao)
             val = ao[0].reshape((nconf, nelec, -1))
             grad = ao[1:4].reshape((3, nconf, nelec, -1))
             return (val, grad)
         elif mode == "lap":
-            ao = np.real_if_close(
-                self.mol.eval_gto("GTOval_cart_deriv2", coords), tol=1e4
-            )
+            ao = self.mol.eval_gto("GTOval_cart_deriv2", coords)
+            if np.all(ao.imag < np.finfo(float).eps * real_tol):
+                ao = np.real(ao)
             val = ao[0].reshape((nconf, nelec, -1))
             grad = ao[1:4].reshape((3, nconf, nelec, -1))
             lap = ao[[4, 7, 9]].reshape((3, nconf, nelec, -1))
