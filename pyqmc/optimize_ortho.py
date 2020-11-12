@@ -151,13 +151,19 @@ def sample_overlap_worker(wfs, configs, pgrad, nsteps, tstep=0.5, collect_energy
         for k, it in save_dat.items():
             if k not in block_avg:
                 block_avg[k] = np.zeros((*it.shape,), dtype=it.dtype)
-            if k in ["overlap", "overlap_gradient", "weight_final"]:
+            if k in ["overlap", "overlap_gradient", "weight_final", "energy_overlap"]:
                 block_avg[k] += save_dat[k] / nsteps
             else:
                 block_avg[k] += save_dat[k] * save_dat["weight_final"] / nsteps
 
     for k, it in block_avg.items():
-        if k not in ["overlap", "overlap_gradient", "weight_final", "acceptance"]:
+        if k not in [
+            "overlap",
+            "overlap_gradient",
+            "weight_final",
+            "energy_overlap",
+            "acceptance",
+        ]:
             it /= block_avg["weight_final"]
     return block_avg, configs
 
