@@ -391,7 +391,7 @@ def evaluate(return_data, warmup):
     dp = avg_data["dppsi"]
     condition = np.real(avg_data["dpidpj"] - np.einsum("i,j->ij", dp, dp))
 
-    return {
+    return_data = {
         "N": N,
         "S": S,
         "S_derivative": S_derivative,
@@ -400,6 +400,12 @@ def evaluate(return_data, warmup):
         "condition": condition,
         "total": np.real(avg_data["total"]),
     }
+
+    if "energy_overlap" in avg_data.keys():
+        Hfi = avg_data["energy_overlap"] / Nij[-1]
+        return_data["H"] = Hfi
+
+    return return_data
 
 
 def optimize_orthogonal(

@@ -34,6 +34,9 @@ def collect_energy_overlaps(wfs, configs, pgrad):
         normalized_values.conj(),
         normalized_values / denominator * np.asarray(energy_f),
     ) / len(ref)
+    save_dat["normalization"] = np.sum(
+        np.exp(2 * (log_vals - ref)) / denominator, axis=1
+    )
 
     return save_dat
 
@@ -59,3 +62,14 @@ class WFEnergyAccumulator:
 
     def shapes(self):
         return {"ke": (), "ecp": (), "total": ()}
+
+
+def evaluate(return_data, warmup):
+    avg_data = {}
+    for k, it in return_data.items():
+        avg_data[k] = np.average(it[warmup:], axis=0)
+
+    N = avg_data["normalization"]
+    Nij = np.sqrt(np.outer(N, N))
+    Hij = avg_data["energy_overlap"] / Nij
+    return {"N": N, "H": Hij}
