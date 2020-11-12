@@ -77,14 +77,6 @@ def collect_overlap_data(wfs, configs, pgrad, collect_energy=False):
             normalized_values / denominator,
         ) / len(ref)
 
-        ## For computing all energy overlaps - need to avg energy for all wfs
-        # energy_f = np.array([pgrad.enacc(configs, wf)["total"] for wf in wfs])
-        # save_dat["energy_overlap"] = np.einsum(  # shape (wf, wf)
-        #    "ik,jk->ij",
-        #    normalized_values.conj(),
-        #    normalized_values / denominator * energy_f,
-        # ) / len(ref)
-
     dat = pgrad.avg(configs, wfs[-1], weight[-1])
     for k in dat.keys():
         save_dat[k] = dat[k]
