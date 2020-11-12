@@ -21,7 +21,7 @@ def ortho_hdf(hdf_file, data, attr, configs, parameters):
                 hdf["wf/" + k][...] = it.copy()
 
 
-def collect_overlap_data(wfs, configs, pgrad):
+def collect_overlap_data(wfs, configs, pgrad, collect_energy=False):
     r""" Collect the averages assuming that 
     configs are distributed according to 
     
@@ -37,6 +37,9 @@ def collect_overlap_data(wfs, configs, pgrad):
 
     .. math:: \partial_m \langle \Psi_f | \Psi_i \rangle = \left\langle \frac{\partial_{fm} \Psi_i^* \Psi_j}{\rho} \right\rangle_{\rho}
 
+    `energy_overlap`:
+
+    .. math:: \langle \Psi_f | H | \Psi_i \rangle = \left\langle \frac{\Psi_f^* \Psi_j}{\rho} \left(\frac{H \Psi_f}{\Psi_f}\right)^* \right\rangle_{\rho}
     """
     phase, log_vals = [np.array(x) for x in zip(*[wf.value() for wf in wfs])]
     log_vals = np.real(log_vals)  # should already be real
@@ -65,6 +68,23 @@ def collect_overlap_data(wfs, configs, pgrad):
     weight = np.exp(-2 * (log_vals[:, np.newaxis] - log_vals))
     weight = 1.0 / np.sum(weight, axis=1)
 
+    if collect_energy:
+        ## For computing only overlaps with i = f
+        energy_f = pgrad.enacc(configs, wfs[-1])["total"]
+        save_dat["energy_overlap"] = np.einsum(  # shape (wf, wf)
+            "k,jk->j",
+            (normalized_values[-1] * energy_f).conj(),
+            normalized_values / denominator,
+        ) / len(ref)
+
+        ## For computing all energy overlaps - need to avg energy for all wfs
+        # energy_f = np.array([pgrad.enacc(configs, wf)["total"] for wf in wfs])
+        # save_dat["energy_overlap"] = np.einsum(  # shape (wf, wf)
+        #    "ik,jk->ij",
+        #    normalized_values.conj(),
+        #    normalized_values / denominator * energy_f,
+        # ) / len(ref)
+
     dat = pgrad.avg(configs, wfs[-1], weight[-1])
     for k in dat.keys():
         save_dat[k] = dat[k]
@@ -83,7 +103,7 @@ def construct_rho_gradient(grads, log_values):
     return total_grad
 
 
-def sample_overlap_worker(wfs, configs, pgrad, nsteps, tstep=0.5):
+def sample_overlap_worker(wfs, configs, pgrad, nsteps, tstep=0.5, collect_energy=False):
     r""" Run nstep Metropolis steps to sample a distribution proportional to 
     :math:`\sum_i |\Psi_i|^2`, where :math:`\Psi_i` = wfs[i]
     """
@@ -125,7 +145,9 @@ def sample_overlap_worker(wfs, configs, pgrad, nsteps, tstep=0.5):
                 wf.updateinternals(e, newcoorde, mask=accept)
 
         # Collect rolling average
-        save_dat = collect_overlap_data(wfs, configs, pgrad)
+        save_dat = collect_overlap_data(
+            wfs, configs, pgrad, collect_energy=collect_energy
+        )
         for k, it in save_dat.items():
             if k not in block_avg:
                 block_avg[k] = np.zeros((*it.shape,), dtype=it.dtype)
@@ -140,7 +162,7 @@ def sample_overlap_worker(wfs, configs, pgrad, nsteps, tstep=0.5):
     return block_avg, configs
 
 
-def sample_overlap(wfs, configs, pgrad, nblocks=10, nsteps=10, tstep=0.5):
+def sample_overlap(wfs, configs, pgrad, nblocks=10, nsteps=10, **kwargs):
     r"""
     Sample 
 
@@ -163,7 +185,9 @@ def sample_overlap(wfs, configs, pgrad, nblocks=10, nsteps=10, tstep=0.5):
 
     return_data = {}
     for block in range(nblocks):
-        block_avg, configs = sample_overlap_worker(wfs, configs, pgrad, nsteps, tstep)
+        block_avg, configs = sample_overlap_worker(
+            wfs, configs, pgrad, nsteps, **kwargs
+        )
         # Blocks stored
         for k, it in block_avg.items():
             if k not in return_data:
