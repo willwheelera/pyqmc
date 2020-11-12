@@ -1,5 +1,6 @@
 import numpy as np
 import pyqmc.energy as energy
+from pyqmc.mc import limdrift
 
 
 def collect_energy_overlaps(wfs, configs, pgrad):
@@ -22,17 +23,17 @@ def collect_energy_overlaps(wfs, configs, pgrad):
     normalized_values = phase * np.exp(log_vals - ref)
 
     # don't recompute coulomb part for each wf - especially ewald for periodic
-    energy_f = pgrad.enacc(configs, wf)
+    energy_f = pgrad.enacc(configs, wfs[-1])
     coulombpart = energy_f["total"] - (energy_f["ecp"] + energy_f["ke"])
 
     wf_enacc = WFEnergyAccumulator(pgrad.enacc.mol, pgrad.enacc.threshold)
     energies = [wf_enacc(configs, wf)["total"] + coulombpart for wf in wfs[:-1]]
-    energies.append(energyf["total"])
+    energies.append(energy_f["total"])
 
     save_dat["energy_overlap"] = np.einsum(  # shape (wf, wf)
         "ik,jk->ij",
         normalized_values.conj(),
-        normalized_values / denominator * np.asarray(energy_f),
+        normalized_values / denominator * np.asarray(energies),
     ) / len(ref)
     save_dat["normalization"] = np.sum(
         np.exp(2 * (log_vals - ref)) / denominator, axis=1
@@ -50,7 +51,7 @@ class WFEnergyAccumulator:
         self.threshold = threshold
 
     def __call__(self, configs, wf):
-        ecp_val = energy.get_ecp(mol, configs, wf, threshold)
+        ecp_val = energy.get_ecp(self.mol, configs, wf, self.threshold)
         ke = energy.kinetic(configs, wf)
         return {"ke": ke, "ecp": ecp_val, "total": ke + ecp_val}
 
@@ -73,3 +74,80 @@ def evaluate(return_data, warmup):
     Nij = np.sqrt(np.outer(N, N))
     Hij = avg_data["energy_overlap"] / Nij
     return {"N": N, "H": Hij}
+
+
+def sample_overlap_worker(wfs, configs, pgrad, nsteps, tstep=0.5, collect=[]):
+    r""" Run nstep Metropolis steps to sample a distribution proportional to 
+    :math:`\sum_i |\Psi_i|^2`, where :math:`\Psi_i` = wfs[i]
+    """
+    nconf, nelec, _ = configs.configs.shape
+    for wf in wfs:
+        wf.recompute(configs)
+    block_avg = {}
+    block_avg["acceptance"] = np.zeros(nsteps)
+    for n in range(nsteps):
+        for e in range(nelec):  # a sweep
+            # Propose move
+            grads = [np.real(wf.gradient(e, configs.electron(e)).T) for wf in wfs]
+            grad = limdrift(np.mean(grads, axis=0))
+            gauss = np.random.normal(scale=np.sqrt(tstep), size=(nconf, 3))
+            newcoorde = configs.configs[:, e, :] + gauss + grad * tstep
+            newcoorde = configs.make_irreducible(e, newcoorde)
+
+            # Compute reverse move
+            grads = [np.real(wf.gradient(e, newcoorde).T) for wf in wfs]
+            new_grad = limdrift(np.mean(grads, axis=0))
+            forward = np.sum(gauss ** 2, axis=1)
+            backward = np.sum((gauss + tstep * (grad + new_grad)) ** 2, axis=1)
+
+            # Acceptance
+            t_prob = np.exp(1 / (2 * tstep) * (forward - backward))
+            wf_ratios = np.array(
+                [np.abs(wf.testvalue(e, newcoorde)) ** 2 for wf in wfs]
+            )
+            log_values = np.real(np.array([wf.value()[1] for wf in wfs]))
+            weights = np.exp(2 * (log_values - log_values[0]))
+
+            ratio = t_prob * np.sum(wf_ratios * weights, axis=0) / weights.sum(axis=0)
+            accept = ratio > np.random.rand(nconf)
+            block_avg["acceptance"][n] += accept.mean() / nelec
+
+            # Update wave function
+            configs.move(e, newcoorde, accept)
+            for wf in wfs:
+                wf.updateinternals(e, newcoorde, mask=accept)
+
+        # Collect rolling average
+        for func in collect:
+            save_dat = func(wfs, configs, pgrad)
+            for k, it in save_dat.items():
+                if k not in block_avg:
+                    block_avg[k] = np.zeros((*it.shape,), dtype=it.dtype)
+                block_avg[k] += save_dat[k] / nsteps
+
+    return block_avg, configs
+
+
+def sample_overlap(
+    wfs, configs, pgrad, nblocks=10, nsteps=10, collect=(collect_energy_overlaps,)
+):
+    r"""
+    Sample 
+
+    .. math:: \rho(R) = \sum_i |\Psi_i(R)|^2
+
+    `pgrad` is expected to be a gradient generator. returns data as follows:
+
+    """
+
+    return_data = {}
+    for block in range(nblocks):
+        block_avg, configs = sample_overlap_worker(
+            wfs, configs, pgrad, nsteps, collect=collect
+        )
+        # Blocks stored
+        for k, it in block_avg.items():
+            if k not in return_data:
+                return_data[k] = np.zeros((nblocks, *it.shape), dtype=it.dtype)
+            return_data[k][block, ...] = it.copy()
+    return return_data, configs
