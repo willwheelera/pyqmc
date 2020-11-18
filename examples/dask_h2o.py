@@ -1,46 +1,56 @@
-from pyqmc import dasktools
 from dask.distributed import Client, LocalCluster
 import pyqmc
 
 ncore = 2
-nconfig = ncore*400
+nconfig = ncore * 400
 
-def generate_wfs():
+
+def run_scf():
     from pyscf import gto, scf
-    import pyqmc
+
     mol = gto.M(
         atom="O 0 0 0; H 0 -2.757 2.587; H 0 2.757 2.587", basis="bfd_vtz", ecp="bfd"
-        )
+    )
     mf = scf.RHF(mol).run()
-    wf=pyqmc.slater_jastrow(mol,mf)
-
-    return mol,mf,wf
+    return mol, mf
 
 
-
-if __name__=="__main__":
+if __name__ == "__main__":
     cluster = LocalCluster(n_workers=ncore, threads_per_worker=1)
     client = Client(cluster)
-    mol,mf,wf=generate_wfs()
-    from pyqmc.mc import vmc
-    from pyqmc.dasktools import distvmc,line_minimization
-    from pyqmc.dmc import rundmc
-    from pyqmc import EnergyAccumulator
-    import pandas as pd
+    mol, mf = run_scf()
+    from pyqmc import vmc, line_minimization, rundmc
 
-    df,coords=distvmc(wf,pyqmc.initial_guess(mol,nconfig),client=client,nsteps_per=10,nsteps=10)
-    line_minimization(wf,coords,pyqmc.gradient_generator(mol,wf,["wf2acoeff", "wf2bcoeff"]),client=client)
+    wf, to_opt = pyqmc.default_sj(mol, mf)
+    pgrad_acc = pyqmc.gradient_generator(mol, wf, to_opt)
+    configs = pyqmc.initial_guess(mol, nconfig)
+    line_minimization(
+        wf,
+        configs,
+        pgrad_acc,
+        hdf_file="h2o_opt.hdf",
+        client=client,
+        npartitions=ncore,
+        verbose=True,
+    )
+    df, configs = vmc(
+        wf,
+        configs,
+        hdf_file="h2o_vmc.hdf",
+        accumulators={"energy": pgrad_acc.enacc},
+        client=client,
+        npartitions=ncore,
+        verbose=True,
+    )
     dfdmc, configs, weights = rundmc(
         wf,
-        coords,
-        nsteps=5000,
-        branchtime=5,
-        accumulators={"energy": EnergyAccumulator(mol)},
+        configs,
+        hdf_file="h2o_dmc.hdf",
+        nsteps=1000,
+        accumulators={"energy": pgrad_acc.enacc},
         ekey=("energy", "total"),
         tstep=0.02,
         verbose=True,
-        propagate=pyqmc.dasktools.distdmc_propagate,
         client=client,
+        npartitions=ncore,
     )
-
-    dfdmc = pd.DataFrame(dfdmc).to_json("dmc.json")

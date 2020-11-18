@@ -15,7 +15,7 @@ from pyqmc import reblock
 def test():
     """ Ensure that DMC obtains the exact result for a hydrogen atom """
     from pyscf import lib, gto, scf
-    from pyqmc.slateruhf import PySCFSlaterUHF
+    from pyqmc.slater import PySCFSlater
     from pyqmc.jastrowspin import JastrowSpin
     from pyqmc.dmc import limdrift, rundmc
     from pyqmc.mc import vmc
@@ -29,10 +29,10 @@ def test():
     mf = scf.UHF(mol).run()
     nconf = 1000
     configs = OpenConfigs(np.random.randn(nconf, 1, 3))
-    wf1 = PySCFSlaterUHF(mol, mf)
+    wf1 = PySCFSlater(mol, mf)
     wf = wf1
     wf2 = JastrowSpin(mol, a_basis=[CutoffCuspFunction(5, 0.2)], b_basis=[])
-    wf2.parameters["acoeff"] = np.asarray([[[-1.0, 0]]])
+    wf2.parameters["acoeff"] = np.asarray([[[1.0, 0]]])
     wf = MultiplyWF(wf1, wf2)
 
     dfvmc, configs_ = vmc(
@@ -46,16 +46,17 @@ def test():
     )
 
     warmup = 200
+    branchtime = 5
     dfdmc, configs_, weights_ = rundmc(
         wf,
         configs,
-        nsteps=4000 + warmup,
-        branchtime=5,
+        nsteps=4000 + warmup * branchtime,
+        branchtime=branchtime,
         accumulators={"energy": EnergyAccumulator(mol)},
         ekey=("energy", "total"),
-        tstep=0.005,
+        tstep=0.01,
         drift_limiter=limdrift,
-        verbose=False,
+        verbose=True,
     )
 
     dfdmc = pd.DataFrame(dfdmc)

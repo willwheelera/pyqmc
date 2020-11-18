@@ -109,7 +109,6 @@ class Ewald:
         .. math:: W_G = \frac{4\pi}{V |\vec{G}|^2} e^{- \frac{|\vec{G}|^2}{ 4\alpha^2}}
 
         Inputs:
-            latvec: (3, 3) array of lattice vectors; latvec[0] is the first
             ewald_gmax: int, max number of reciprocal lattice vectors to check away from 0
         """
         cellvolume = np.linalg.det(self.latvec)
@@ -157,7 +156,7 @@ class Ewald:
         
         .. math:: E_{\rm self+charged}^{ee} = N_e C_{\rm square} + \frac{N_e(N_e-1)}{2} C_{ij}
 
-        .. math:: E_{\rm self+charged}^{e\text{-ion}} = N_e \sum_{I=1}^{N_{ion}} Z_I C_{ij}
+        .. math:: E_{\rm self+charged}^{e\text{-ion}} = - N_e \sum_{I=1}^{N_{ion}} Z_I C_{ij}
 
         .. math:: E_{\rm self+charged}^{\text{ion-ion}} = \sum_{I=1}^{N_{ion}} Z_I^2 C_{\rm square} + \sum_{I<J}^{N_{ion}} Z_I Z_J C_{ij}
 
@@ -168,26 +167,30 @@ class Ewald:
         .. math:: E_{\rm self+charged}^{\text{single-test}} = C_{\rm square} - \sum_{I=1}^{N_{ion}} Z_I C_{ij}
 
         """
-        i_sum = np.sum(self.atom_charges)
+        self.i_sum = np.sum(self.atom_charges)
         ii_sum2 = np.sum(self.atom_charges ** 2)
-        ii_sum = (i_sum ** 2 - ii_sum2) / 2
+        ii_sum = (self.i_sum ** 2 - ii_sum2) / 2
 
-        ijconst = -np.pi / (cellvolume * self.alpha ** 2)
-        self.ijconst = ijconst
-        squareconst = -self.alpha / np.sqrt(np.pi) + ijconst / 2
+        self.ijconst = -np.pi / (cellvolume * self.alpha ** 2)
+        self.squareconst = -self.alpha / np.sqrt(np.pi) + self.ijconst / 2
 
-        self.ii_const = ii_sum * ijconst + ii_sum2 * squareconst
-        self.ee_const = lambda ne: ne * (ne - 1) / 2 * ijconst + ne * squareconst
-        self.ei_const = lambda ne: -ne * i_sum * ijconst
-
-        self.e_single = lambda ne: (ne - 1) * ijconst - i_sum * ijconst + squareconst
-        self.e_single_test = -i_sum * ijconst + squareconst
+        self.ii_const = ii_sum * self.ijconst + ii_sum2 * self.squareconst
+        self.e_single_test = -self.i_sum * self.ijconst + self.squareconst
         self.ion_ion = self.ewald_ion()
 
         # XC correction not used, so we can compare to other codes
-        rs = lambda ne: (3 / (4 * np.pi) / (ne * cellvolume)) ** (1 / 3)
-        cexc = 0.36
-        xc_correction = lambda ne: cexc / rs(ne)
+        # rs = lambda ne: (3 / (4 * np.pi) / (ne * cellvolume)) ** (1 / 3)
+        # cexc = 0.36
+        # xc_correction = lambda ne: cexc / rs(ne)
+
+    def ee_const(self, ne):
+        return ne * (ne - 1) / 2 * self.ijconst + ne * self.squareconst
+
+    def ei_const(self, ne):
+        return -ne * self.i_sum * self.ijconst
+
+    def e_single(self, ne):
+        return 0.5 * (ne - 1) * self.ijconst - self.i_sum * self.ijconst + self.squareconst
 
     def ewald_ion(self):
         r"""
@@ -225,6 +228,14 @@ class Ewald:
         ion_ion = ion_ion_real + ion_ion_rec
         return ion_ion
 
+    def _real_cij(self, dists):
+        r = np.zeros(dists.shape[:-1])
+        cij = np.zeros(r.shape)
+        for ld in self.lattice_displacements:
+            r[:] = np.linalg.norm(dists + ld, axis=-1)
+            cij += erfc(self.alpha * r) / r
+        return cij
+
     def ewald_electron(self, configs):
         r"""
         Compute the Ewald sum for e-e and e-ion
@@ -258,27 +269,19 @@ class Ewald:
         # Real space electron-ion part
         # ei_distances shape (elec, conf, atom, dim)
         ei_distances = configs.dist.dist_i(self.atom_coords, configs.configs)
-        rvec = ei_distances[:, :, :, np.newaxis, :] + self.lattice_displacements
-        r = np.linalg.norm(rvec, axis=-1)
-        ei_real_separated = np.einsum(
-            "k,ijkl->ji", -self.atom_charges, erfc(self.alpha * r) / r
-        )
+        ei_cij = self._real_cij(ei_distances)
+        ei_real_separated = np.einsum("k,ijk->ji", -self.atom_charges, ei_cij)
 
         # Real space electron-electron part
+        ee_real_separated = np.zeros((nconf, nelec))
         if nelec > 1:
             ee_distances, ee_inds = configs.dist.dist_matrix(configs.configs)
-            rvec = ee_distances[:, :, np.newaxis, :] + self.lattice_displacements
-            r = np.linalg.norm(rvec, axis=-1)
-            ee_cij = np.sum(erfc(self.alpha * r) / r, axis=-1)
+            ee_cij = self._real_cij(ee_distances)
 
-            ee_matrix = np.zeros((nconf, nelec, nelec))
-            # ee_matrix[:, ee_inds] = ee_cij
             for ((i, j), val) in zip(ee_inds, ee_cij.T):
-                ee_matrix[:, i, j] = val
-                ee_matrix[:, j, i] = val
-            ee_real_separated = ee_matrix.sum(axis=-1) / 2
-        else:
-            ee_real_separated = np.zeros(nelec)
+                ee_real_separated[:, i] += val
+                ee_real_separated[:, j] += val
+            ee_real_separated /= 2
 
         # Reciprocal space electron-electron part
         e_GdotR = np.dot(configs.configs, self.gpoints.T)

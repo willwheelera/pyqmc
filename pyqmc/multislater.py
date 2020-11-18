@@ -1,5 +1,5 @@
 import numpy as np
-from pyqmc.slateruhf import sherman_morrison_row
+from pyqmc.slater import sherman_morrison_row, get_complex_phase
 
 
 def sherman_morrison_ms(e, inv, vec):
@@ -31,37 +31,49 @@ class MultiSlater:
     A multi-determinant wave function object initialized
     via an SCF calculation. Methods and structure are very similar
     to the PySCFSlaterUHF class.
+
+    How to use with hci
+
+    .. code-block:: python
+
+        cisolver = pyscf.hci.SCI(mol)
+        cisolver.select_cutoff=0.1
+        nmo = mf.mo_coeff.shape[1]
+        nelec = mol.nelec
+        h1 = mf.mo_coeff.T.dot(mf.get_hcore()).dot(mf.mo_coeff)
+        h2 = pyscf.ao2mo.full(mol, mf.mo_coeff)
+        e, civec = cisolver.kernel(h1, h2, nmo, nelec, verbose=4)
+        cisolver.ci = civec[0]
+        wf = pyqmc.multislater.MultiSlater(mol, mf, cisolver, tol=0.1)
+
+
     """
 
-    def __init__(self, mol, mf, mc, tol=None):
-        if tol is None:
-            self.tol = -1
-        else:
-            self.tol = tol
+    def __init__(self, mol, mf, mc, tol=None, freeze_orb=None):
+        self.tol = -1 if tol is None else tol
         self.parameters = {}
         self._mol = mol
-        self._nelec = (mc.nelecas[0] + mc.ncore, mc.nelecas[1] + mc.ncore)
-        self._copy_ci(mc)
-
-        if len(mc.mo_coeff.shape) == 3:
-            self.parameters["mo_coeff_alpha"] = mc.mo_coeff[0][:, : mc.ncas + mc.ncore]
-            self.parameters["mo_coeff_beta"] = mc.mo_coeff[1][:, : mc.ncas + mc.ncore]
+        if hasattr(mc, "nelecas"):
+            # In case nelecas overrode the information from the molecule object.
+            self._nelec = (mc.nelecas[0] + mc.ncore, mc.nelecas[1] + mc.ncore)
         else:
-            self.parameters["mo_coeff_alpha"] = mc.mo_coeff[:, : mc.ncas + mc.ncore]
-            self.parameters["mo_coeff_beta"] = mc.mo_coeff[:, : mc.ncas + mc.ncore]
+            self._nelec = mol.nelec
+        self._copy_ci(mc)
+        mo_coeff = mc.mo_coeff if hasattr(mc, "mo_coeff") else mf.mo_coeff
+        mo_cutoff_alpha = np.max(self._det_occup[0]) + 1
+        mo_cutoff_beta = np.max(self._det_occup[1]) + 1
+
+        if len(mo_coeff.shape) == 3:
+            self.parameters["mo_coeff_alpha"] = mo_coeff[0][:, :mo_cutoff_alpha]
+            self.parameters["mo_coeff_beta"] = mo_coeff[1][:, :mo_cutoff_beta]
+        else:
+            self.parameters["mo_coeff_alpha"] = mo_coeff[:, :mo_cutoff_alpha]
+            self.parameters["mo_coeff_beta"] = mo_coeff[:, :mo_cutoff_beta]
         self._coefflookup = ("mo_coeff_alpha", "mo_coeff_beta")
         self.pbc_str = "PBC" if hasattr(mol, "a") else ""
         self.iscomplex = bool(sum(map(np.iscomplexobj, self.parameters.values())))
-        if self.iscomplex:
-            self.get_phase = lambda x: x / np.abs(x)
-        else:
-            self.get_phase = np.sign
-
-        self.iscomplex = bool(sum(map(np.iscomplexobj, self.parameters.values())))
-        if self.iscomplex:
-            self.get_phase = lambda x: x / np.abs(x)
-        else:
-            self.get_phase = np.sign
+        self.get_phase = get_complex_phase if self.iscomplex else np.sign
+        self.freeze_orb = [[], []] if freeze_orb is None else freeze_orb
 
     def _copy_ci(self, mc):
         """       
@@ -70,15 +82,27 @@ class MultiSlater:
         """
         from pyscf import fci
 
-        norb = mc.ncas
-        nelec = mc.nelecas
-        ncore = mc.ncore
+        ncore = mc.ncore if hasattr(mc, "ncore") else 0
 
         # find multi slater determinant occupation
-        detwt = []
-        deters = fci.addons.large_ci(mc.ci, norb, nelec, tol=-1)
+        if hasattr(mc, "_strs"):
+            # if this is a HCI object, it will have _strs
+            bigcis = np.abs(mc.ci > self.tol)
+            nstrs = int(mc._strs.shape[1] / 2)
+            # old code for single strings.
+            # deters = [(c,bin(s[0]), bin(s[1])) for c, s in zip(mc.ci[bigcis],mc._strs[bigcis,:])]
+            deters = []
+            # In pyscf, the first n/2 strings represent the up determinant and the second
+            # represent the down determinant.
+            for c, s in zip(mc.ci[bigcis], mc._strs[bigcis, :]):
+                s1 = "".join([str(bin(p)).replace("0b", "") for p in s[0:nstrs]])
+                s2 = "".join([str(bin(p)).replace("0b", "") for p in s[nstrs:]])
+                deters.append((c, s1, s2))
+        else:
+            deters = fci.addons.large_ci(mc.ci, mc.ncas, mc.nelecas, tol=-1)
 
         # Create map and occupation objects
+        detwt = []
         map_dets = [[], []]
         occup = [[], []]
         for x in deters:
@@ -86,7 +110,6 @@ class MultiSlater:
                 detwt.append(x[0])
                 alpha_occ, __ = binary_to_occ(x[1], ncore)
                 beta_occ, __ = binary_to_occ(x[2], ncore)
-
                 if alpha_occ not in occup[0]:
                     map_dets[0].append(len(occup[0]))
                     occup[0].append(alpha_occ)
@@ -144,6 +167,7 @@ class MultiSlater:
         ao = np.real_if_close(
             self._mol.eval_gto(self.pbc_str + "GTOval_sph", epos.configs), tol=1e4
         )
+        self._aovals[:, e, :] = ao
         mo = ao.dot(self.parameters[self._coefflookup[s]])
 
         mo_vals = mo[:, self._det_occup[s]]
@@ -179,11 +203,7 @@ class MultiSlater:
 
     def _testrow(self, e, vec, mask=None, spin=None):
         """vec is a nconfig,nmo vector which replaces row e"""
-        if spin is None:
-            s = int(e >= self._nelec[0])
-        else:
-            s = spin
-
+        s = int(e >= self._nelec[0]) if spin is None else spin
         if mask is None:
             mask = [True] * vec.shape[0]
 
@@ -212,6 +232,14 @@ class MultiSlater:
         if len(numer.shape) == 2:
             denom = denom[:, np.newaxis]
         return numer / denom
+
+    def _testcol(self, det, i, s, vec):
+        """vec is a nconfig,nmo vector which replaces column i 
+        of spin s in determinant det"""
+
+        return np.einsum(
+            "ij...,ij->i...", vec, self._inverse[s][:, det, i, :], optimize="greedy"
+        )
 
     def gradient(self, e, epos):
         """ Compute the gradient of the log wave function 
@@ -297,11 +325,12 @@ class MultiSlater:
         return ratios
 
     def pgradient(self):
-        """Compute the parameter gradient of Psi. 
-        Returns d_p \Psi/\Psi as a dictionary of numpy arrays,
+        r"""Compute the parameter gradient of Psi. 
+        Returns $$d_p \Psi/\Psi$$ as a dictionary of numpy arrays,
         which correspond to the parameter dictionary."""
         d = {}
 
+        # Det coeff
         det_coeff_grad = (
             self._dets[0][0, :, self._det_map[0]]
             * self._dets[1][0, :, self._det_map[1]]
@@ -315,5 +344,31 @@ class MultiSlater:
         d["det_coeff"] = (
             det_coeff_grad.T / (curr_val[0] * np.exp(curr_val[1]))[:, np.newaxis]
         )
-        # Mo_coeff not implemented yet
+
+        # Mo_coeff, adapted from SlaterUHF
+        for parm in ["mo_coeff_alpha", "mo_coeff_beta"]:
+            s = 0
+            if "beta" in parm:
+                s = 1
+
+            ao = self._aovals[
+                :, s * self._nelec[0] : self._nelec[s] + s * self._nelec[0], :
+            ]
+            pgrad_shape = (ao.shape[0],) + self.parameters[parm].shape
+            pgrad = np.zeros(pgrad_shape)
+
+            largest_mo = np.max(np.ravel(self._det_occup[s]))
+            for i in range(largest_mo + 1):  # MO loop
+                if i not in self.freeze_orb[s]:
+                    for det in range(self.parameters["det_coeff"].shape[0]):  # Det loop
+                        if (
+                            i in self._det_occup[s][self._det_map[s][det]]
+                        ):  # Check if MO in det
+                            col = self._det_occup[s][self._det_map[s][det]].index(i)
+                            pgrad[:, :, i] += (
+                                self.parameters["det_coeff"][det]
+                                * d["det_coeff"][:, det, np.newaxis]
+                                * self._testcol(self._det_map[s][det], col, s, ao)
+                            )
+            d[parm] = np.array(pgrad)
         return d
