@@ -3,6 +3,60 @@ import pyqmc
 from scipy.special import erfc
 
 
+def _real_cij(dists, lattice_displacements, alpha):
+    r = np.zeros(dists.shape[:-1])
+    cij = np.zeros(r.shape)
+    for ld in lattice_displacements:
+        r[:] = np.linalg.norm(dists + ld, axis=-1)
+        cij += erfc(alpha * r) / r
+    return cij
+
+
+def _ewald_electron(configs,):
+    nconf, nelec, ndim = configs.configs.shape
+
+
+def _ewald_ei_real(configs, selfdict):
+    # Real space electron-ion part
+    # ei_distances shape (elec, conf, atom, dim)
+    ei_distances = configs.dist.dist_i(selfdict["atom_coords"], configs.configs)
+    ei_cij = self._real_cij(ei_distances)
+    ei_real_separated = np.einsum("k,ijk->ji", -self.atom_charges, ei_cij)
+
+    # Real space electron-electron part
+    ee_real_separated = np.zeros((nconf, nelec))
+    if nelec > 1:
+        ee_distances, ee_inds = configs.dist.dist_matrix(configs.configs)
+        ee_cij = self._real_cij(ee_distances)
+
+        for ((i, j), val) in zip(ee_inds, ee_cij.T):
+            ee_real_separated[:, i] += val
+            ee_real_separated[:, j] += val
+        ee_real_separated /= 2
+
+    # Reciprocal space electron-electron part
+    e_GdotR = np.dot(configs.configs, self.gpoints.T)
+    e_expGdotR = np.exp(1j * e_GdotR)
+    sum_e_exp = np.sum(e_expGdotR, axis=1, keepdims=True)
+    coscos_sinsin = np.real(sum_e_exp.conj() * e_expGdotR)
+    ### Don't know why we subtract 0.5 for "separated"
+    ee_recip_separated = np.dot(coscos_sinsin - 0.5, self.gweight)
+
+    # Reciprocal space electron-ion part
+    coscos_sinsin = np.real(-self.ion_exp.conj() * e_expGdotR)
+    ei_recip_separated = np.dot(coscos_sinsin, self.gweight)
+
+    # Combine parts
+    self.ei_separated = ei_real_separated + 2 * ei_recip_separated
+    self.ee_separated = ee_real_separated + 1 * ee_recip_separated
+    self.ewalde_separated = self.ei_separated + self.ee_separated
+    nelec = ee_recip_separated.shape[1]
+    ### Add back the 0.5 that was subtracted earlier
+    ee = self.ee_separated.sum(axis=1) + nelec / 2 * self.gweight.sum()
+    ei = self.ei_separated.sum(axis=1)
+    return ee, ei
+
+
 class Ewald:
     r"""
     The Ewald summation computes the Coulomb energy of a periodic arrangement of charges.
@@ -190,7 +244,9 @@ class Ewald:
         return -ne * self.i_sum * self.ijconst
 
     def e_single(self, ne):
-        return 0.5 * (ne - 1) * self.ijconst - self.i_sum * self.ijconst + self.squareconst
+        return (
+            0.5 * (ne - 1) * self.ijconst - self.i_sum * self.ijconst + self.squareconst
+        )
 
     def ewald_ion(self):
         r"""
