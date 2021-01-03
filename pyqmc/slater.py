@@ -1,22 +1,61 @@
 import numpy as np
 from pyqmc import pbc
+from jax.ops import index, index_add, index_update
+import jax.numpy as jnp
+
+
+### ON CPU ###
+# configs
+# _aovals
+
+
+### ON GPU ###
+# _inverse
+# parameters mo_coeff
 
 
 def sherman_morrison_row(e, inv, vec):
-    tmp = np.einsum("ek,ekj->ej", vec, inv)
+    tmp = jnp.einsum("ek,ekj->ej", vec, inv)
     ratio = tmp[:, e]
     inv_ratio = inv[:, :, e] / ratio[:, np.newaxis]
-    invnew = inv - np.einsum("ki,kj->kij", inv_ratio, tmp)
-    invnew[:, :, e] = inv_ratio
+    invnew = inv - jnp.einsum("ki,kj->kij", inv_ratio, tmp)
+    invnew = index_update(invnew, index[:, :, e], inv_ratio)
     return ratio, invnew
 
 
-_gldict = {"laplacian": np.s_[:1], "gradient_laplacian": np.s_[0:4]}
+def updateinternals_pbc_kernel(e, aos, params, inverse):
+    mo = evaluate_mos_pbc_kernel(jnp.asarray(aos), jnp.asarray(params))
+    ratio, newinverse = sherman_morrison_row(e, jnp.asarray(inverse), mo)
+    logval = jnp.log(jnp.abs(ratio))
+    return phase, logval, newinverse
+
+
+def evaluate_mos_mol_kernel(ao, params):
+    return jnp.dot(ao, params)
+
+
+def evaluate_mos_pbc_kernel(aos, params):
+    mo = [jnp.dot(ao, param) for ao, param in zip(aos, params)]
+    return jnp.concatenate(mo, axis=-1)
+
+
+def evaluate_orbitals_pbc_kernel(
+    ao, prim_wrap, origwrap, lattice_vectors, S, kpts, phasefunc
+):
+    wrap = prim_wrap + jnp.dot(origwrap, S)
+    kdotR = jnp.einsum("ij,kj,lk->il", kpts, lattice_vectors, wrap)
+    wrap_phase = phasefunc(kdotR)
+    # return [ao[k] * wrap_phase[k][:, np.newaxis] for k in range(len(kpts))]
+    return [ao * wp[:, jnp.newaxis] for ao, wp in zip(aos, wrap_phase)]
+
+
+# _gldict = {"laplacian": np.s_[:1], "gradient_laplacian": np.s_[0:4]}
+_gldict = {"laplacian": slice(1), "gradient_laplacian": slice(4)}
 
 
 def _aostack_mol(ao, gl):
-    return np.concatenate(
-        [ao[_gldict[gl]], ao[[4, 7, 9]].sum(axis=0, keepdims=True)], axis=0
+    return jnp.concatenate(
+        [ao[_gldict[gl]], jnp.sum(ao[[4, 7, 9]], axis=0, keepdims=True)], axis=0
     )
 
 
@@ -25,18 +64,22 @@ def _aostack_pbc(ao, gl):
 
 
 def get_wrapphase_real(x):
-    return (-1) ** np.round(x / np.pi)
+    return (-1) ** jnp.round(x / jnp.pi)
 
 
 def get_wrapphase_complex(x):
-    return np.exp(1j * x)
+    return jnp.exp(1j * x)
+
+
+def get_real_phase(x):
+    return jnp.sign(x)
 
 
 def get_complex_phase(x):
-    return x / np.abs(x)
+    return x / jnp.abs(x)
 
 
-def get_k_indices(cell, mf, kpts, tol=1e-6):
+def get_kinds(cell, mf, kpts, tol=1e-6):
     """Given a list of kpts, return inds such that mf.kpts[inds] is a list of kpts equivalent to the input list"""
     kdiffs = mf.kpts[np.newaxis] - kpts[:, np.newaxis]
     frac_kdiffs = np.dot(kdiffs, cell.lattice_vectors().T) / (2 * np.pi)
@@ -72,7 +115,7 @@ class PySCFSlater:
             self.get_phase = get_complex_phase
             self.get_wrapphase = get_wrapphase_complex
         else:
-            self.get_phase = np.sign
+            self.get_phase = get_real_phase
             self.get_wrapphase = get_wrapphase_real
 
     def _init_mol(self, mol, mf):
@@ -106,13 +149,14 @@ class PySCFSlater:
                 cell.scale = 1
         self.supercell = cell
         self._cell = cell.original_cell
+        self.lattice_vectors = cell.lattice_vectors()
 
         # Define kpts
         if twist is None:
             twist = np.zeros(3)
         else:
             twist = np.dot(np.linalg.inv(cell.a), np.mod(twist, 1.0)) * 2 * np.pi
-        self.kinds = get_k_indices(self._cell, mf, get_supercell_kpts(cell) + twist)
+        self.kinds = get_kinds(self._cell, mf, get_supercell_kpts(cell) + twist)
         self._kpts = mf.kpts[self.kinds]
         assert len(self.kinds) == len(self._kpts), (self._kpts, mf.kpts)
         self.nk = len(self._kpts)
@@ -160,7 +204,7 @@ class PySCFSlater:
         return self._mol.eval_gto(eval_str, mycoords)
 
     def _evaluate_mos_mol(self, ao, s):
-        return ao.dot(self.parameters[self._coefflookup[s]])
+        return evaluate_mos_mol_kernel(ao, self.parameters[self._coefflookup[s]])
 
     def _evaluate_orbitals_pbc(self, configs, mask=None, eval_str="GTOval_sph"):
         mycoords = configs.configs
@@ -169,27 +213,36 @@ class PySCFSlater:
             mycoords = mycoords[mask]
             configswrap = configswrap[mask]
         mycoords = mycoords.reshape((-1, mycoords.shape[-1]))
+        configswrap = configswrap.reshape((-1, configswrap.shape[-1]))
+
         # wrap supercell positions into primitive cell
-        prim_coords, prim_wrap = pbc.enforce_pbc(self._cell.lattice_vectors(), mycoords)
-        configswrap = configswrap.reshape(prim_wrap.shape)
-        wrap = prim_wrap + np.dot(configswrap, self.supercell.S)
-        kdotR = np.einsum(
-            "ij,kj,lk->il", self._kpts, self._cell.lattice_vectors(), wrap
-        )
-        wrap_phase = self.get_wrapphase(kdotR)
+        prim_coords, prim_wrap = pbc.enforce_pbc(self.lattice_vectors, mycoords)
+
         # evaluate AOs for all electron positions
         ao = self._cell.eval_gto("PBC" + eval_str, prim_coords, kpts=self._kpts)
-        ao = [ao[k] * wrap_phase[k][:, np.newaxis] for k in range(self.nk)]
-        return ao
+        return evaluate_orbitals_pbc_kernel(
+            ao,
+            prim_wrap,
+            configswrap,
+            self.lattice_vectors,
+            self.supercell.S,
+            self._kpts,
+            self.get_wrapphase,
+        )
+
+        # wrap = prim_wrap + np.dot(configswrap, self.supercell.S)
+        # kdotR = np.einsum(
+        #    "ij,kj,lk->il", self._kpts, self.lattice_vectors, wrap
+        # )
+        # wrap_phase = self.get_wrapphase(kdotR)
+        # ao = [ao[k] * wrap_phase[k][:, np.newaxis] for k in range(self.nk)]
+        # return ao
 
     def _evaluate_mos_pbc(self, aos, s):
         """
         Evaluate MOs for spin s given aos
         """
-        c = self._coefflookup[s]
-        p = np.split(self.parameters[c], self.param_split[c], axis=-1)
-        mo = [ao.dot(p[k]) for k, ao in enumerate(aos)]
-        return np.concatenate(mo, axis=-1)
+        return evaluate_mos_pbc_kernel(aos, self.params_split_by_k[s])
 
     def recompute(self, configs):
         """This computes the value from scratch. Returns the logarithm of the wave function as
@@ -198,6 +251,10 @@ class PySCFSlater:
         aos = self.evaluate_orbitals(configs)
         if hasattr(self, "nk"):
             aos_shape = (self.nk, nconf, nelec, -1)
+            self.params_split_by_k = [
+                np.split(self.parameters[c], self.param_split[c], axis=-1)
+                for c in self._coefflookup
+            ]
         else:
             aos_shape = (1, nconf, nelec, -1)
         aos = np.reshape(aos, aos_shape)
@@ -221,6 +278,7 @@ class PySCFSlater:
         eeff = e - s * self._nelec[0]
         aos = self.evaluate_orbitals(epos, mask=mask)
         self._aovals[:, mask, e, :] = np.asarray(aos)  # (kpt, config, ao)
+        ### make the rest gpu kernel
         mo = self.evaluate_mos(aos, s)
         ratio, self._inverse[s][mask, :, :] = sherman_morrison_row(
             eeff, self._inverse[s][mask, :, :], mo
