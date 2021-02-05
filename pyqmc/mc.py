@@ -79,10 +79,8 @@ def limdrift(g, cutoff=1):
     Returns: 
       The vector with the cut off applied.
     """
-    tot = np.linalg.norm(g, axis=1)
-    mask = tot > cutoff
-    g[mask, :] = cutoff * g[mask, :] / tot[mask, np.newaxis]
-    return g
+    scaling = np.clip(cutoff / np.linalg.norm(g, axis=1, keepdims=True), None, 1.0)
+    return g * scaling
 
 
 def vmc_file(hdf_file, data, attr, configs):
