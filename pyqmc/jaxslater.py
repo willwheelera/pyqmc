@@ -27,10 +27,6 @@ def _testrow_gradient_kernel(eeff, mograd, inverse):
     return jnp.einsum("dij,ij->di", mograd, inverse[:, :, eeff])
 
 
-def evaluate_mos_mol_kernel(ao, mo_coeff):
-    return jnp.dot(ao, mo_coeff)
-
-
 _gldict = {"laplacian": slice(1), "gradient_laplacian": slice(4)}
 
 
