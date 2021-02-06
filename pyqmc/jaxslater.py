@@ -24,7 +24,8 @@ def sherman_morrison_row(e, inv, vec):
 
 
 def _testrow_gradient_kernel(eeff, mograd, inverse):
-    return jnp.einsum("dij,ij->di", mograd, inverse[:, :, eeff])
+    ratios = jnp.einsum("dij,ij->di", mograd, inverse[:, :, eeff])
+    return ratios[1:] / ratios[:1]
 
 
 _gldict = {"laplacian": slice(1), "gradient_laplacian": slice(4)}
@@ -175,10 +176,10 @@ class JaxPySCFSlater:
         Note that this can be called even if the internals have not been updated for electron e,
         if epos differs from the current position of electron e."""
         s = int(e >= self._nelec[0])
+        eeff = e - s * self._nelec[0]
         aograd = self.evaluate_orbitals(epos, eval_str="GTOval_sph_deriv1")
         mograd = self.evaluate_mos(aograd, s)
-        ratios = np.asarray([self._testrow(e, x) for x in mograd])
-        return ratios[1:] / ratios[:1]
+        return _testrow_gradient_kernel(eeff, mograd, self._inverse[s])
 
     def laplacian(self, e, epos):
         s = int(e >= self._nelec[0])
