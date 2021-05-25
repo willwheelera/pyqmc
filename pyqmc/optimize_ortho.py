@@ -6,22 +6,6 @@ import pyqmc.mc as mc
 import os
 
 
-def ortho_hdf(hdf_file, data, attr, configs, parameters):
-
-    if hdf_file is not None:
-        with h5py.File(hdf_file, "a") as hdf:
-            if "configs" not in hdf.keys():
-                hdftools.setup_hdf(hdf, data, attr)
-                hdf.create_dataset("configs", configs.configs.shape)
-                for k, it in parameters.items():
-                    hdf.create_dataset("wf/" + k, data=it)
-
-            hdftools.append_hdf(hdf, data)
-            hdf["configs"][:, :, :] = configs.configs
-            for k, it in parameters.items():
-                hdf["wf/" + k][...] = it.copy()
-
-
 def collect_overlap_data(wfs, configs, pgrad):
     r"""Collect the averages assuming that
     configs are distributed according to
@@ -476,14 +460,7 @@ def optimize_orthogonal(
     """
 
     # Restart
-    if hdf_file is not None and os.path.isfile(hdf_file):
-        with h5py.File(hdf_file, "r") as hdf:
-            if "wf" in hdf.keys():
-                grp = hdf["wf"]
-                for k in grp.keys():
-                    wfs[-1].parameters[k] = np.array(grp[k])
-            if "iteration" in hdf.keys():
-                step_offset = np.max(hdf["iteration"][...]) + 1
+    wfs[-1], step_offset = pyqmc.linemin.check_restart(hdf_file, wfs[-1])
 
     parameters = pgrad.transform.serialize_parameters(wfs[-1].parameters)
 
@@ -702,6 +679,6 @@ def optimize_orthogonal(
             "line_norm": line_data["weight"],
         }
 
-        ortho_hdf(hdf_file, save_data, attr, coords, wfs[-1].parameters)
+        pyqmc.linemin.opt_hdf(hdf_file, save_data, attr, coords, wfs[-1].parameters)
 
     return wfs
