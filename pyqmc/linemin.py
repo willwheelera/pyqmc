@@ -92,6 +92,19 @@ def stable_fit(xfit, yfit):
     return est_min
 
 
+def check_restart(hdf_file, wf):
+    iteration_offset = 0
+    if hdf_file is not None and os.path.isfile(hdf_file):
+        with h5py.File(hdf_file, "r") as hdf:
+            if "wf" in hdf.keys():
+                grp = hdf["wf"]
+                for k in grp.keys():
+                    wf.parameters[k] = gpu.cp.asarray(grp[k])
+            if "iteration" in hdf.keys():
+                iteration_offset = np.max(hdf["iteration"][...]) + 1
+    return wf, iteration_offset
+
+
 def line_minimization(
     wf,
     coords,
@@ -136,15 +149,7 @@ def line_minimization(
         update_kws = {}
 
     # Restart
-    iteration_offset = 0
-    if hdf_file is not None and os.path.isfile(hdf_file):
-        with h5py.File(hdf_file, "r") as hdf:
-            if "wf" in hdf.keys():
-                grp = hdf["wf"]
-                for k in grp.keys():
-                    wf.parameters[k] = gpu.cp.asarray(grp[k])
-            if "iteration" in hdf.keys():
-                iteration_offset = np.max(hdf["iteration"][...]) + 1
+    wf, iteration_offset = check_restart(hdf_file, wf)
 
     # Attributes for linemin
     attr = dict(max_iterations=max_iterations, npts=npts, steprange=steprange)
