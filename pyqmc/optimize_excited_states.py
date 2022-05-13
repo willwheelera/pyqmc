@@ -11,6 +11,42 @@ Optimizer test
 """
 
 
+class MultiTransform:
+    """
+    For serializing parameters of multiple wave functions together
+    """
+    def __init__(self, transforms):
+        self.transforms = transforms
+
+    def serialize_parameters(self, wfs):
+        """list over wfs of serialized parameters """
+        return [
+            transform.serialize_parameters(wf.parameters)
+            for wf, transform in zip(wfs, self.transforms)
+        ]
+
+    def serialize_gradients(self, wfs):
+        """list over wfs of serialized gradients """
+        dppsi = [
+            transform.serialize_gradients(wf.pgradient())
+            for wf, transform in zip(wfs, self.transforms)
+        ]
+
+    def deserialize(self, wfs, parameters):
+        for wf, transform, wf_parm in zip(wfs, self.transforms, parameter):
+            for k, it in transform.deserialize(wf, wf_parm).items():
+                wf.parameters[k] = it
+
+class OverlapAccumulator:
+    """Like PGradAccumulator but for multiple wave functions"""
+    def __init__(self, enacc, transforms):
+        self.enacc = enacc
+        self.transform = MultiTransform(transforms)
+
+    def __call__(self, configs, wf):
+
+
+
 def collect_overlap_data(wfs, configs, energy, transforms):
     r"""Collect the averages over configs assuming that
     configs are distributed according to
@@ -411,7 +447,7 @@ def correlated_sampling_worker(wfs, configs, energy, transforms, parameters):
 
     energy_final = []
     overlap_final = []
-    for p, parameter in enumerate(parameters):
+    for parameter in parameters:
         for wf, transform, wf_parm in zip(wfs, transforms, parameter):
             for k, it in transform.deserialize(wf, wf_parm).items():
                 wf.parameters[k] = it
