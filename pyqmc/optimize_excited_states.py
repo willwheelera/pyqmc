@@ -27,7 +27,7 @@ class MultiTransform:
 
     def serialize_gradients(self, wfs):
         """list over wfs of serialized gradients """
-        dppsi = [
+        return [
             transform.serialize_gradients(wf.pgradient())
             for wf, transform in zip(wfs, self.transforms)
         ]
@@ -37,17 +37,19 @@ class MultiTransform:
             for k, it in transform.deserialize(wf, wf_parm).items():
                 wf.parameters[k] = it
 
+
 class OverlapAccumulator:
     """Like PGradAccumulator but for multiple wave functions"""
     def __init__(self, enacc, transforms):
         self.enacc = enacc
         self.transform = MultiTransform(transforms)
 
-    def __call__(self, configs, wf):
+    def __call__(self, configs, wfs):
+        weighted_dat, unweighted_dat = collect_overlap_data(wfs, configs, self.enacc, self.transform)
+        return weighted_dat, unweighted_dat
 
 
-
-def collect_overlap_data(wfs, configs, energy, transforms):
+def collect_overlap_data(wfs, configs, energy, transform):
     r"""Collect the averages over configs assuming that
     configs are distributed according to
 
@@ -79,10 +81,7 @@ def collect_overlap_data(wfs, configs, energy, transforms):
     normalized_values = phase * np.nan_to_num(np.exp(log_vals - ref))
 
     energies = invert_list_of_dicts([energy(configs, wf) for wf in wfs])
-    dppsi = [
-        transform.serialize_gradients(wf.pgradient())
-        for transform, wf in zip(transforms, wfs)
-    ]
+    dppsi = transform.serialize_gradients(wf.pgradient())
 
     weighted_dat = {}
     unweighted_dat = {}
