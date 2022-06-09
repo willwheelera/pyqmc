@@ -32,6 +32,13 @@ class GPSJastrow:
         self._e_partial = e_partial
         return self.value()
 
+    # return phase and log(value) tuple
+    def value(self):
+        return (
+            np.ones(self.nconfig),
+            self._compute_value_from_sum_e(self._sum_over_e),
+        )
+
     def _compute_partial_e(self, epos):
         y = epos[..., np.newaxis, np.newaxis, :] - self.parameters["Xtraining"]
         return (y * y).sum(axis=(-2, -1))
@@ -47,20 +54,14 @@ class GPSJastrow:
     def updateinternals(self, e, epos, configs, mask=None, saved_values=None):
         if mask is None:
             mask = [True] * epos.configs.shape[0]
-        prior_partial_e = self._e_partial[:, :, e]
-        prior_sum = self._sum_over_e
-        partial_e = self._compute_partial_e(epos.configs)
-        new_sum = prior_sum + partial_e - prior_partial_e
-        self._sum_over_e[mask] = new_sum[mask]
-        self._e_partial[:, :, e][mask] = partial_e[mask]
+        if saved_values is None:
+            partial_e = self._compute_partial_e(epos.configs[mask])
+            new_sum = self._sum_over_e[mask] + partial_e - self._e_partial[mask, :, e]
+        else:
+            partial_e, new_sum = saved_values
+        self._sum_over_e[mask] = new_sum
+        self._e_partial[:, :, e][mask] = partial_e
         self._configscurrent.move(e, epos, mask)
-
-    # return phase and log(value) tuple
-    def value(self):
-        return (
-            np.ones(self.nconfig),
-            self._compute_value_from_sum_e(self._sum_over_e),
-        )
 
     def testvalue(self, e, epos, mask=None):
         if mask is None:
@@ -79,7 +80,7 @@ class GPSJastrow:
         else:
             e_sum2 = prior_e_sum + new_partial_e - self._e_partial[mask, :, e]
         means2 = self._compute_value_from_sum_e(e_sum2)
-        return np.exp(means2 - old_means), None
+        return np.exp(means2 - old_means), (new_partial_e, e_sum2)
 
     def gradient_value(self, e, epos):
         return self.gradient(e, epos), *self.testvalue(e, epos)
