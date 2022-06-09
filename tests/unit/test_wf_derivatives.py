@@ -6,6 +6,7 @@ from pyqmc.multiplywf import MultiplyWF
 from pyqmc.addwf import AddWF
 from pyqmc.manybody_jastrow import J3
 from pyqmc.wftools import generate_jastrow
+from pyqmc.wftools import generate_gps_jastrow
 import pyqmc.api as pyq
 
 def run_tests(wf, epos, epsilon):
@@ -49,9 +50,11 @@ def test_obc_wfs(LiH_sto3g_rhf, epsilon=1e-5, nconf=10):
     mol, mf = LiH_sto3g_rhf
     for wf in [
         generate_jastrow(mol)[0],
+        generate_gps_jastrow(mol)[0],
         J3(mol),
         MultiplyWF(Slater(mol, mf), generate_jastrow(mol)[0]),
         MultiplyWF(Slater(mol, mf), generate_jastrow(mol)[0], J3(mol)),
+        MultiplyWF(Slater(mol, mf), generate_gps_jastrow(mol)[0]),
         Slater(mol, mf),
     ]:
         for k in wf.parameters:
