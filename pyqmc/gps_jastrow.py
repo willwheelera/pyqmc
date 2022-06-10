@@ -4,17 +4,15 @@ from pyqmc import mc
 # things to change: figure if there is a way to deal with epos with len(epos.shape)>2 without if statement
 # when masking, only do relevant calculations. understand masking better.
 
-# TODO rename Xtraining to Xsupport
-
 
 class GPSJastrow:
     def __init__(self, mol, start_alpha, start_sigma):
-        self.n_training = start_alpha.size
+        self.n_support = start_alpha.size
         self._mol = mol
         self.iscomplex = False
         self.parameters = {}
-        # self.parameters["Xtraining"] = mc.initial_guess(mol,n_training).configs
-        self.parameters["Xtraining"] = np.array(
+        # self.parameters["Xsupport"] = mc.initial_guess(mol,n_support).configs
+        self.parameters["Xsupport"] = np.array(
             [[[0, 0, 0], [0, 0, 1.54 / 0.529177]], [[0, 0, 1.54 / 0.529177], [0, 0, 0]]]
         )
         self.parameters["sigma"] = start_sigma
@@ -23,7 +21,7 @@ class GPSJastrow:
     def recompute(self, configs):
         self._configscurrent = configs
         self.nconfig, self.nelec = configs.configs.shape[:-1]
-        e_partial = np.zeros(shape=(self.nconfig, self.n_training, self.nelec))
+        e_partial = np.zeros(shape=(self.nconfig, self.n_support, self.nelec))
 
         # is there faster way than looping over e <- profile before pursing this
         for e in range(self.nelec):
@@ -32,15 +30,15 @@ class GPSJastrow:
         self._e_partial = e_partial
         return self.value()
 
-    # return phase and log(value) tuple
     def value(self):
+        """returns phase and log(value) tuple"""
         return (
             np.ones(self.nconfig),
             self._compute_value_from_sum_e(self._sum_over_e),
         )
 
     def _compute_partial_e(self, epos):
-        y = epos[..., np.newaxis, np.newaxis, :] - self.parameters["Xtraining"]
+        y = epos[..., np.newaxis, np.newaxis, :] - self.parameters["Xsupport"]
         return np.einsum("...kl,...kl->...", y, y)
 
     def _compute_value_from_sum_e(self, sum_e):
@@ -82,10 +80,9 @@ class GPSJastrow:
         return (self.gradient(e, epos), *self.testvalue(e, epos))
 
     def gradient(self, e, epos):
-        # TODO very confusing to use same variable names in gradient() and laplacian() to mean different things
         partial_e = self._compute_partial_e(epos.configs)
         gradsum = (
-            self.parameters["Xtraining"].sum(axis=1)
+            self.parameters["Xsupport"].sum(axis=1)
             - epos.configs[:, np.newaxis] * self.nelec
         )
         gradsum = np.transpose(gradsum, axes=(2, 0, 1))
@@ -103,7 +100,7 @@ class GPSJastrow:
     def gradient_laplacian(self, e, epos):
         # Why is this variable called gradsum??
         gradsum = (
-            self.parameters["Xtraining"].sum(axis=1)
+            self.parameters["Xsupport"].sum(axis=1)
             - epos.configs[:, np.newaxis] * self.nelec
         )
         partial_e = self._compute_partial_e(epos.configs)
@@ -133,10 +130,9 @@ class GPSJastrow:
     def pgradient(self):
         configs = self._configscurrent.configs
         alphader = np.exp(-0.5 * self._sum_over_e / self.parameters["sigma"])
-        # print(self._sum_over_e.shape,"sumovere")
-        # nc,ns,ne,3
+        # dersum: nc,ns,ne,3
         dersum = (
-            self.parameters["Xtraining"] * self.nelec
+            self.parameters["Xsupport"] * self.nelec
             - configs.sum(axis=1)[:, np.newaxis, np.newaxis]
         )
         alphaderalpha = alphader * self.parameters["alpha"] / self.parameters["sigma"]
@@ -146,4 +142,4 @@ class GPSJastrow:
             alphaderalpha / (2 * self.parameters["sigma"]),
             self._sum_over_e,
         )
-        return {"alpha": alphader, "Xtraining": Xder, "sigma": sigmader}
+        return {"alpha": alphader, "Xsupport": Xder, "sigma": sigmader}
