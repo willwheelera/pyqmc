@@ -21,11 +21,15 @@ class GPSJastrow:
     def recompute(self, configs):
         self._configscurrent = configs
         self.nconfig, self.nelec = configs.configs.shape[:-1]
-        e_partial = np.zeros(shape=(self.nconfig, self.n_support, self.nelec))
 
-        # is there faster way than looping over e <- profile before pursing this
-        for e in range(self.nelec):
-            e_partial[:, :, e] = self._compute_partial_e(configs.configs[:, e, :])
+        # is there faster way than looping over e? 
+        #for e in range(self.nelec):
+        #    e_partial[:, :, e] = self._compute_partial_e(configs.configs[:, e, :])
+        # recompute isn't called all that often
+        # but here's an idea: y^2 = configs^2 + Xsupport^2 - 2*configs*Xsupport
+        e_partial = -2 * np.einsum("ced,sfd->cse", configs.configs, self.parameters["Xsupport"])
+        e_partial += self.nelec * np.sum(configs.configs ** 2, axis=-1)[:, np.newaxis]
+        e_partial += np.einsum("sfd,sfd->s", self.parameters["Xsupport"], self.parameters["Xsupport"])[:, np.newaxis]
         self._sum_over_e = e_partial.sum(axis=-1)
         self._e_partial = e_partial
         return self.value()
