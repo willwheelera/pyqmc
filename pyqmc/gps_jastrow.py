@@ -41,7 +41,7 @@ class GPSJastrow:
 
     def _compute_partial_e(self, epos):
         y = epos[..., np.newaxis, np.newaxis, :] - self.parameters["Xtraining"]
-        return np.einsum("ijkl,ijkl->ij", y, y)
+        return np.einsum("...kl,...kl->...", y, y)
 
     def _compute_value_from_sum_e(self, sum_e):
         alpha, sigma = self.parameters["alpha"], self.parameters["sigma"]
