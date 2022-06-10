@@ -79,7 +79,7 @@ class GPSJastrow:
         return np.exp(means2 - old_means), (new_partial_e, e_sum2)
 
     def gradient_value(self, e, epos):
-        return self.gradient(e, epos), *self.testvalue(e, epos)
+        return (self.gradient(e, epos), *self.testvalue(e, epos))
 
     def gradient(self, e, epos):
         # TODO very confusing to use same variable names in gradient() and laplacian() to mean different things
@@ -107,18 +107,24 @@ class GPSJastrow:
             - epos.configs[:, np.newaxis] * self.nelec
         )
         partial_e = self._compute_partial_e(epos.configs)
-        e_sum = partial_e + self._sum_over_e - self._e_partial[:, :, e]
-        term1 = np.sum((gradsum / self.parameters["sigma"]) ** 2, axis=-1)
-        term2 = -3 * self.nelec / self.parameters["sigma"]
+        e_sum = self._sum_over_e + partial_e - self._e_partial[:, :, e]
+        term1grad = gradsum / self.parameters["sigma"]
+        term1lap = np.sum(term1grad ** 2, axis=-1)
+        term2lap = -3 * self.nelec / self.parameters["sigma"]
 
-        gradient = self.gradient(e, epos)
+        grads = np.einsum(
+            "s,csd,cs->cd",
+            self.parameters["alpha"],
+            term1grad,
+            np.exp(-e_sum / (2 * self.parameters["sigma"])),
+        )
         laps = np.einsum(
             "s,cs,cs->c",
             self.parameters["alpha"],
-            term1 + term2,
+            term1lap + term2lap,
             np.exp(-e_sum / (2 * self.parameters["sigma"])),
         )
-        laps += np.sum(np.power(gradient.T, 2), axis=-1)
+        laps += np.sum(gradient ** 2, axis=-1)
         return gradient, laps
 
     def laplacian(self, e, epos):
@@ -129,21 +135,15 @@ class GPSJastrow:
         alphader = np.exp(-0.5 * self._sum_over_e / self.parameters["sigma"])
         # print(self._sum_over_e.shape,"sumovere")
         # nc,ns,ne,3
-        # Xder2 = self.parameters["alpha"]*ds*np.exp(-0.5*self._sum_over_e/self.parameters["sigma"])/self.parameters["sigma"]
         dersum = (
             self.parameters["Xtraining"] * self.nelec
             - configs.sum(axis=1)[:, np.newaxis, np.newaxis]
         )
-        Xder = np.einsum(
-            "s,csed,cs->csed",
-            self.parameters["alpha"] / self.parameters["sigma"],
-            dersum,
-            np.exp(-0.5 * self._sum_over_e / self.parameters["sigma"]),
-        )
+        alphaderalpha = alphader * self.parameters["alpha"] / self.parameters["sigma"]
+        Xder = np.einsum("csed,cs->csed", dersum, alphaderalpha)
         sigmader = np.einsum(
-            "s,cs,cs->c",
-            self.parameters["alpha"] / (2 * self.parameters["sigma"] ** 2),
-            np.exp(-0.5 * self._sum_over_e / self.parameters["sigma"]),
+            "cs,cs->c",
+            alphaderalpha / (2 * self.parameters["sigma"]),
             self._sum_over_e,
         )
         return {"alpha": alphader, "Xtraining": Xder, "sigma": sigmader}
