@@ -41,15 +41,11 @@ class GPSJastrow:
 
     def _compute_partial_e(self, epos):
         y = epos[..., np.newaxis, np.newaxis, :] - self.parameters["Xtraining"]
-        return (y * y).sum(axis=(-2, -1))
+        return np.einsum("ijkl,ijkl->ij", y, y)
 
     def _compute_value_from_sum_e(self, sum_e):
-        means = np.sum(
-            self.parameters["alpha"]
-            * np.exp(-sum_e / (2.0 * self.parameters["sigma"])),
-            axis=-1,
-        )
-        return means
+        alpha, sigma = self.parameters["alpha"], self.parameters["sigma"]
+        return np.dot(np.exp(-sum_e / (2.0 * sigma)), alpha)
 
     def updateinternals(self, e, epos, configs, mask=None, saved_values=None):
         if mask is None:
