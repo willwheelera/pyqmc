@@ -55,8 +55,8 @@ class GPSJastrow:
             new_sum = self._sum_over_e[mask] + partial_e - self._e_partial[mask, :, e]
         else:
             partial_e, new_sum = saved_values
-        self._sum_over_e[mask] = new_sum
-        self._e_partial[:, :, e][mask] = partial_e
+        self._sum_over_e[mask] = new_sum[mask]
+        self._e_partial[:, :, e][mask] = partial_e[mask]
         self._configscurrent.move(e, epos, mask)
 
     def testvalue(self, e, epos, mask=None):
@@ -112,8 +112,8 @@ class GPSJastrow:
         term1lap = np.sum(term1grad ** 2, axis=-1)
         term2lap = -3 * self.nelec / self.parameters["sigma"]
 
-        grads = np.einsum(
-            "s,csd,cs->cd",
+        gradient = np.einsum(
+            "s,csd,cs->dc",
             self.parameters["alpha"],
             term1grad,
             np.exp(-e_sum / (2 * self.parameters["sigma"])),
@@ -124,7 +124,7 @@ class GPSJastrow:
             term1lap + term2lap,
             np.exp(-e_sum / (2 * self.parameters["sigma"])),
         )
-        laps += np.sum(gradient ** 2, axis=-1)
+        laps += np.sum(gradient ** 2, axis=0)
         return gradient, laps
 
     def laplacian(self, e, epos):
