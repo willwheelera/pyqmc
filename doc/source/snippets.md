@@ -4,8 +4,7 @@ HOWTOs
 ### Periodic systems
 
 ```
-def run_si_scf(chkfile="si_scf.chk"):
-    a = 5.43
+def run_si_scf(chkfile="si_scf.chk", a=5.43):
     cell = gto.Cell(
         atom="Si 0. 0. 0.; Si {0} {0} {0}".format(a / 4),
         unit="angstrom",
@@ -22,16 +21,17 @@ def run_si_scf(chkfile="si_scf.chk"):
     mf.run()
 ```
 
+Run QMC on `n_conventional` conventional unit cells of silicon.
 ```
 import pyqmc.recipes
 import numpy as np
 
-def run_si_qmc(chkfile="si_scf.chk"):
+def run_si_qmc(chkfile="si_scf.chk", n_conventional=2):
     # Define periodic supercell in PyQMC
     conventional_S = np.ones((3, 3)) - 2 * np.eye(3)
-    S = 2 * conventional_S
+    S = n_conventional * conventional_S
     pyqmc.recipes.OPTIMIZE(chkfile, "si_opt.chk", S=S)
-    pyqmc.recipes.DMC(chkfile, "si_dmc.chk", start_from="si_opt.chk", S=S)
+    pyqmc.recipes.DMC(chkfile, "si_dmc.chk", load_parameters="si_opt.chk", S=S)
 ```
 
 ### Orbital optimization
@@ -44,6 +44,12 @@ pyqmc.recipes.OPTIMIZE(chkfile, "opt.chk",slater_kws={'optimize_orbitals':True,'
 
 Most of the effort is in setting up and saving the CI coefficients correctly, which is done in `run_hci()` here. 
 You can copy `run_hci()` and use it on any system.
+
+If you are using pyscf 2.0 or above, you will need to run 
+```
+pip install git+git://github.com/pyscf/naive-hci
+```
+to get the simple selected CI method.
 
 ```
 import pyqmc
@@ -155,7 +161,7 @@ class DipoleAccumulator:
 
 import pyqmc.recipes
 pyqmc.recipes.VMC("h2o.hdf5", "dipole.hdf5", 
-                  start_from="h2o_sj_800.hdf5", 
+                  load_parameters="h2o_sj_800.hdf5", 
                   accumulators={'extra_accumulators':{'dipole':DipoleAccumulator()}})
 ```
 

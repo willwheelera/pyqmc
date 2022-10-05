@@ -1,4 +1,4 @@
-Specific instructions for HPC machines
+Installation instructions for HPC machines
 --------------------------------------------------------------
 
 
@@ -25,20 +25,30 @@ pip install snakemake
 #### Submission script
 
 ```
-#!/bin/bash
-#SBATCH --time=24:00:00                  # Job run time (hh:mm:ss)
+#!/usr/bin/env python3
+import sys
+import uuid
+import os
+subname = str(uuid.uuid4())
+jobname=sys.argv[1]
+filename=sys.argv[1]
+with open(subname,'w') as f:
+    f.write(f"""#!/bin/bash
+#SBATCH --time=36:00:00                  # Job run time (hh:mm:ss)
 #SBATCH --nodes=1                        # Number of nodes
-#SBATCH --ntasks-per-node=40             # Number of task (cores/ppn) per node
-#SBATCH --job-name=a120
-#SBATCH --partition=wagner
-#SBATCH --output=myjob.o%j              # Name of batch job output file
+#SBATCH --cpus-per-task=40             # Number of task (cores/ppn) per node
+#SBATCH --job-name={jobname}            # Name of batch job
+#SBATCH --partition=qmchamm           # Partition (queue)
+#SBATCH --output={jobname}.o
+##SBATCH --error={jobname}.e              # Name of batch job error file
+##SBATCH --mail-user=NetID@illinois.edu  # Send email notifications
+##SBATCH --mail-type=BEGIN,END           # Type of email notifications to send
+. ~/bin/activate_conda.sh
+export OMP_NUM_THREADS=1
+srun -n 1 -c 40 python3  {filename} >& {filename}.stdout
+""")
 
-module load anaconda/3
-module load openmpi/3.1.1-gcc-7.2.0
-.  /usr/local/anaconda/5.2.0/python3/etc/profile.d/conda.sh
-conda activate fast-mpi4py
-
-srun python test.py 
+os.system(f"sbatch {subname}")
 ```
 
 
@@ -98,26 +108,32 @@ You can run this on a login node and it will execute your jobs.
 
 ### Summit
 
-Some information is available here: https://www.olcf.ornl.gov/wp-content/uploads/2019/02/STW_Feb_20190211_summit_workshop_python.pdf
+Some information is available [here](https://www.olcf.ornl.gov/wp-content/uploads/2019/02/STW_Feb_20190211_summit_workshop_python.pdf)
 
 Set up your environment:
+
 ```
-module load python/3.7.0-anaconda3-5.3.0
-conda create -n pyqmc3.8 python=3.8
+module load python/3.8-anaconda3
+conda create -n pyqmc3.9 python=3.9
 conda init
 . .bashrc 
-conda install numpy pandas h5py
-module load gcc/4.8.5
+conda activate pyqmc3.9
+conda install numpy pandas h5py scipy
+module load gcc
 CC=gcc MPICC=mpicc pip install --no-binary mpi4py install mpi4py
+
 ```
 
-Install pyscf and pyqmc.
+
+Install pyscf and pyqmc. I have had trouble just doing `pip install pyscf` for non-Intel machines. 
 ```
-module load gcc/4.8.5
+module load gcc
 module load cmake
-module load openblas/0.3.9-omp
+module load openblas
 
 git clone https://github.com/pyscf/pyscf
+cd pyscf/pyscf/lib
+mkdir build
 cd build
 cmake ..
 make 

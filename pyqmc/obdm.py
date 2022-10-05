@@ -8,25 +8,25 @@ import pyqmc.supercell as supercell
 
 
 class OBDMAccumulator:
-    r"""Return the obdm as an array with indices rho[spin][i][j] = <c_{spin,i}c^+_{spin,j}>
+    r"""Return the obdm as an array with indices rho[spin][i][j] = <c^+_{spin,i}c_{spin,j}>
 
-    .. math:: \rho^\sigma_{ij} = \langle c_{\sigma, i} c^\dagger_{\sigma, j} \rangle
+    .. math:: \rho^\sigma_{ij} = \langle c^\dagger_{\sigma, i} c_{\sigma, j} \rangle
 
     We are measuring the amplitude of moving one electron (e.g. the first one) from orbital :math:`\phi_i` to orbital :math:`\phi_j` (Eq (7) of DOI:10.1063/1.4793531)
 
-    .. math:: \rho_{i,k} = \int dR dr' \Psi^*(R') \phi_k(r') \phi_i^*(r) \Psi(R)
+    .. math:: \rho_{i,j} = \int dR dr' \Psi^*(R') \phi_i(r') \phi_j^*(r) \Psi(R)
 
     (The complex conjugate is on the wrong orbital in Eq (7) in the paper.) Sampling :math:`R` from :math:`|\Psi(R)^2|` and :math:`r'` from :math:`f(r) = \sum_i |\phi(r)|^2`
 
-    .. math:: \rho_{i,k} = \int dR dr' \frac{\Psi^*(R')}{\Psi^*(R)} \left[\Psi^*(R) \Psi(R)\right] \frac{\phi_k(r') \phi_i^*(r)}{f(r)} \left[f(r)\right]
+    .. math:: \rho_{i,j} = \int dR dr' \frac{\Psi^*(R')}{\Psi^*(R)} \left[\Psi^*(R) \Psi(R)\right] \frac{\phi_i(r') \phi_j^*(r)}{f(r)} \left[f(r)\right]
 
     The distributions (in square brackets) are accounted for by the Monte Carlo integration
 
-    .. math:: \rho_{i,k} = \left\langle \frac{\Psi^*(R')}{\Psi^*(R)} \frac{\phi_k(r') \phi_i^*(r)}{f(r)} \right\rangle
+    .. math:: \rho_{i,j} = \left\langle \frac{\Psi^*(R')}{\Psi^*(R)} \frac{\phi_i(r') \phi_j^*(r)}{f(r)} \right\rangle
 
     Eq (9) in the paper is the complex conjugate of this
 
-    .. math:: \rho_{i,k}^* = \left\langle \frac{\Psi(R')}{\Psi(R)} \frac{\phi_k^*(r') \phi_i(r)}{f(r)} \right\rangle
+    .. math:: \rho_{i,j}^* = \left\langle \frac{\Psi(R')}{\Psi(R)} \frac{\phi_j^*(r') \phi_i(r)}{f(r)} \right\rangle
 
 
     Args:
@@ -176,9 +176,7 @@ class OBDMAccumulator:
         return self.orbitals.mos(ao, spin=0)
 
     def keys(self):
-        return set(
-            ["value", "norm"],
-        )
+        return set(["value", "norm"],)
 
     def shapes(self):
         norb = self.norb
@@ -189,7 +187,7 @@ class OBDMAccumulator:
 
 
 def sample_onebody(configs, orbitals, spin, nsamples=1, tstep=0.5):
-    r""" For a set of orbitals defined by orb_coeff, return samples from :math:`f(r) = \sum_i \phi_i(r)^2`. """
+    r"""For a set of orbitals defined by orb_coeff, return samples from :math:`f(r) = \sum_i \phi_i(r)^2`."""
     n = configs.configs.shape[0]
     ao = orbitals.aos("GTOval_sph", configs)
     borb = orbitals.mos(ao, spin=spin)

@@ -40,20 +40,20 @@ def propose_drift_diffusion(wf, configs, tstep, e):
     newepos = configs.make_irreducible(e, eposnew)
 
     # Compute reverse move
-    new_grad = limdrift(np.real(wf.gradient(e, newepos).T), tstep)
+    g, wfratio, saved = wf.gradient_value(e, newepos)
+    new_grad = limdrift(np.real(g.T), tstep)
     forward = np.sum(gauss ** 2, axis=1)
     backward = np.sum((gauss + grad + new_grad) ** 2, axis=1)
     t_prob = np.exp(1 / (2 * tstep) * (forward - backward))
 
     # Acceptance -- fixed-node: reject if wf changes sign
-    wfratio = wf.testvalue(e, newepos)
     ratio = np.abs(wfratio) ** 2 * t_prob
     if not wf.iscomplex:
         ratio *= np.sign(wfratio)
     accept = ratio > np.random.rand(nconfig)
     r2 = np.sum((gauss + grad) ** 2, axis=1)
 
-    return newepos, accept, r2
+    return newepos, accept, r2, saved
 
 
 def propose_tmoves(wf, configs, energy_accumulator, tstep, e):
@@ -149,13 +149,13 @@ def dmc_propagate(
                 )
                 accept = mask & (probability > np.random.rand(nconfig))
                 configs.move(e, newepos, accept)
-                wf.updateinternals(e, newepos, mask=accept)
+                wf.updateinternals(e, newepos, configs, mask=accept)
                 tmove_acceptance += accept / nelec
 
         for e in range(nelec):  # drift-diffusion
-            newepos, accept, r2 = propose_drift_diffusion(wf, configs, tstep, e)
+            newepos, accept, r2, saved = propose_drift_diffusion(wf, configs, tstep, e)
             configs.move(e, newepos, accept)
-            wf.updateinternals(e, newepos, mask=accept)
+            wf.updateinternals(e, newepos, configs, mask=accept, saved_values=saved)
             r2_proposed += r2
             r2_accepted[accept] += r2[accept]
             prob_acceptance += accept / nelec
@@ -171,8 +171,7 @@ def dmc_propagate(
 
         Snew = compute_S(e_trial, e_est, branchcut_start, v2, tstep, eloc, nelec)
         Sold = compute_S(e_trial, e_est, branchcut_start, v2old, tstep, elocold, nelec)
-        p_av = prob_acceptance * 0.5
-        wmult = np.exp(tstep * tdamp * (p_av * Snew + (1.0 - p_av) * Sold))
+        wmult = np.exp(tstep * tdamp * (0.5 * Snew + 0.5 * Sold))
         weights *= wmult
         wavg = np.mean(weights)
 
@@ -262,10 +261,7 @@ def dmc_propagate_parallel(wf, configs, weights, client, npartitions, *args, **k
     weight = np.array([w["weight"] for w in allresults[0]]) * confweight
     weight_avg = weight / np.sum(weight)
     block_avg = {
-        k: np.sum(
-            [res[k] * ww for res, ww in zip(allresults[0], weight_avg)],
-            axis=0,
-        )
+        k: np.sum([res[k] * ww for res, ww in zip(allresults[0], weight_avg)], axis=0,)
         for k in allresults[0][0].keys()
     }
     block_avg["weight"] = np.mean(weight)
@@ -310,6 +306,25 @@ def dmc_file(hdf_file, data, attr, configs, weights):
             hdf["weights"][:] = weights
 
 
+def evaluate_energy_worker(configs, wf, en):
+    wf.recompute(configs)
+    return en(configs, wf)
+
+
+def evaluate_energies(wf, configs, en, client, npartitions):
+    if client is None:
+        return evaluate_energy_worker(configs, wf, en)
+
+    else:
+        config = configs.split(npartitions)
+        runs = [client.submit(evaluate_energy_worker, conf, wf, en) for conf in config]
+        ret = {}
+        data = [r.result() for r in runs]
+        for k in data[0].keys():
+            ret[k] = np.concatenate([d[k] for d in data])
+        return ret
+
+
 def rundmc(
     wf,
     configs,
@@ -324,8 +339,10 @@ def rundmc(
     ekey=("energy", "total"),
     feedback=1.0,
     hdf_file=None,
+    continue_from=None,
     client=None,
     npartitions=None,
+    vmc_warmup=10,
     **kwargs,
 ):
     """
@@ -341,6 +358,7 @@ def rundmc(
     :parameter ekey: tuple of strings; energy is needed for DMC weights. Access total energy by accumulators[ekey[0]](configs, wf)[ekey[1]
     :parameter verbose: Print out step information
     :parameter stepoffset: If continuing a run, what to start the step numbering at.
+    :parameter vmc_warmup: If starting a run, how many VMC warmup blocks to run
     :returns: (df,coords,weights)
       df: A list of dictionaries nstep long that contains all results from the accumulators.
 
@@ -349,9 +367,20 @@ def rundmc(
       weights: The final weights from this calculation
 
     """
-    # Restart from HDF file
-    if hdf_file is not None and os.path.isfile(hdf_file):
-        with h5py.File(hdf_file, "r") as hdf:
+    # Don't continue onto a file that's already there.
+    if continue_from is not None and hdf_file is not None and os.path.isfile(hdf_file):
+        raise RuntimeError(
+            f"continue_from is set but hdf_file={hdf_file} already exists! Delete or rename {hdf_file} and try again."
+        )
+
+    # Restart if hdf_file is there
+    if continue_from is None and hdf_file is not None and os.path.isfile(hdf_file):
+        continue_from = hdf_file
+
+    # Now we should be sure that there is a file
+    # to continue from, if given.
+    if continue_from is not None:
+        with h5py.File(continue_from, "r") as hdf:
             stepoffset = hdf["step"][-1] + 1
             configs.load_hdf(hdf)
             weights = np.array(hdf["weights"])
@@ -363,22 +392,23 @@ def rundmc(
             e_est = hdf["e_est"][-1]
             esigma = hdf["esigma"][-1]
             if verbose:
-                print("Restarted calculation")
+                print(f"Restarting calculation {continue_from} from step {stepoffset}")
     else:
-        warmup = 2
         df, configs = mc.vmc(
             wf,
             configs,
-            accumulators={ekey[0]: accumulators[ekey[0]]},
             client=client,
             npartitions=npartitions,
             verbose=verbose,
+            nblocks=vmc_warmup,
         )
-        en = df[ekey[0] + ekey[1]][warmup:]
+        en = evaluate_energies(wf, configs, accumulators[ekey[0]], client, npartitions)[
+            ekey[1]
+        ]
         eref = np.mean(en).real
         e_trial = eref
         e_est = eref
-        esigma = np.sqrt(np.var(en) * np.mean(df["nconfig"]))
+        esigma = np.std(en)
         if verbose:
             print("eref start", eref, "esigma", esigma)
 

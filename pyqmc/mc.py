@@ -103,26 +103,26 @@ def vmc_worker(wf, configs, tstep, nsteps, accumulators):
         acc = 0.0
         for e in range(nelec):
             # Propose move
-            g, _ = wf.gradient_value(e, configs.electron(e))
+            g, _, _ = wf.gradient_value(e, configs.electron(e))
             grad = limdrift(np.real(g.T))
             gauss = np.random.normal(scale=np.sqrt(tstep), size=(nconf, 3))
             newcoorde = configs.configs[:, e, :] + gauss + grad * tstep
             newcoorde = configs.make_irreducible(e, newcoorde)
 
             # Compute reverse move
-            g, new_val = wf.gradient_value(e, newcoorde)
+            g, new_val, saved = wf.gradient_value(e, newcoorde)
             new_grad = limdrift(np.real(g.T))
             forward = np.sum(gauss ** 2, axis=1)
             backward = np.sum((gauss + tstep * (grad + new_grad)) ** 2, axis=1)
 
             # Acceptance
             t_prob = np.exp(1 / (2 * tstep) * (forward - backward))
-            ratio = new_val ** 2 * t_prob
+            ratio = np.abs(new_val) ** 2 * t_prob
             accept = ratio > np.random.rand(nconf)
 
             # Update wave function
             configs.move(e, newcoorde, accept)
-            wf.updateinternals(e, newcoorde, mask=accept)
+            wf.updateinternals(e, newcoorde, configs, mask=accept, saved_values=saved)
             acc += np.mean(accept) / nelec
 
         # Rolling average on step
@@ -168,6 +168,7 @@ def vmc(
     verbose=False,
     stepoffset=0,
     hdf_file=None,
+    continue_from=None,
     client=None,
     npartitions=None,
 ):
@@ -204,13 +205,25 @@ def vmc(
             print("WARNING: running VMC with no accumulators")
 
     # Restart
-    if hdf_file is not None:
-        with h5py.File(hdf_file, "a") as hdf:
+    if continue_from is None:
+        continue_from = hdf_file
+    elif not os.path.isfile(continue_from):
+        raise RuntimeError("cannot continue from {0}; the file does not exist!")
+    elif hdf_file is not None and os.path.isfile(hdf_file):
+        raise RuntimeError(
+            "continue_from is not None but hdf_file={0} already exists! Delete or rename {0} and try again.".format(
+                hdf_file
+            )
+        )
+    if continue_from is not None and os.path.isfile(continue_from):
+        with h5py.File(continue_from, "r") as hdf:
             if "configs" in hdf.keys():
                 stepoffset = hdf["block"][-1] + 1
                 configs.load_hdf(hdf)
                 if verbose:
-                    print("Restarting calculation from step", stepoffset)
+                    print(
+                        f"Restarting calculation {continue_from} from step {stepoffset}"
+                    )
 
     df = []
 

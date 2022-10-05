@@ -6,6 +6,7 @@ import pytest
 from pyscf import lib, gto, scf
 import pyscf.pbc
 import numpy as np
+import pyscf.hci
 
 """ 
 In this file, we set up several pyscf objects that can be reused across the 
@@ -103,6 +104,20 @@ def H2_ccecp_uhf():
     return mol, mf
 
 @pytest.fixture(scope="module")
+def H2_casci():
+    mol = gto.M(atom="H 0. 0. 0.0; H 0. 0. 2.4",
+            basis=f"ccpvtz",  
+            unit="bohr", 
+            charge=0, 
+            spin=0, 
+            verbose=1)  
+    mf = scf.ROHF(mol).run()
+    mc = pyscf.mcscf.CASCI(mf, 2, 2)
+    mc.fcisolver.nroots = 4
+    mc.kernel()
+    return mol, mf, mc
+
+@pytest.fixture(scope="module")
 def C2_ccecp_rhf():
     mol = gto.M(
                 atom="""C 0 0 0 
@@ -113,6 +128,18 @@ def C2_ccecp_rhf():
     mf = scf.RHF(mol).run()
     return mol, mf
 
+
+@pytest.fixture(scope="module")
+def C_ccecp_rohf():
+    mol = gto.M(
+                atom="""C 0 0 0 
+                C 1 0 0  """,
+                ecp="ccecp",
+                basis="ccecpccpvdz",
+                spin=2
+                )
+    mf = scf.RHF(mol).run()
+    return mol, mf
 
 
 @pytest.fixture(scope='module')
@@ -153,21 +180,45 @@ def li_cubic_ccecp():
         spin=0,
         unit="bohr",
     )
-    cell.exp_to_discard = 0.2
+    cell.exp_to_discard = 0.1
     cell.build(a=np.eye(3) * L)
     kpts = cell.make_kpts(nk)
     mf = pyscf.pbc.scf.KRKS(cell, kpts)
     mf.xc = "pbe"
-    mf = mf.density_fit()
-    mf = pyscf.pbc.dft.multigrid.multigrid(mf)
+    #mf = mf.density_fit()
+    #mf = pyscf.pbc.dft.multigrid.multigrid(mf)
     mf = mf.run()
     return cell, mf
 
 
 @pytest.fixture(scope='module')
-def h_noncubic_sto3g():
-    nk = (2,2,2)
-    L = 3
+def diamond_primitive():
+    cell = pyscf.pbc.gto.Cell()
+    cell.verbose = 5
+    cell.atom=[
+        ['C', np.array([0., 0., 0.])], 
+        ['C', np.array([0.8925, 0.8925, 0.8925])]
+               ]
+    cell.a=[[0.0, 1.785, 1.785], 
+            [1.785, 0.0, 1.785], 
+            [1.785, 1.785, 0.0]]
+    cell.basis = 'ccecpccpvdz'
+    cell.ecp = 'ccecp'
+    cell.exp_to_discard=0.3
+    cell.build()
+    kpts = cell.make_kpts((2,2,2))
+    mf=pyscf.pbc.dft.KRKS(cell, kpts)
+
+    mf.xc='lda,vwn'
+
+    mf.kernel()
+    return cell, mf
+
+
+@pytest.fixture(scope='module')
+def h_noncubic_sto3g_triplet():
+    nk = (1,1,1)
+    L = 8
     mol = pyscf.pbc.gto.M(
         atom="""H     {0}      {0}      {0}                
                   H     {1}      {1}      {1}""".format(
@@ -175,12 +226,13 @@ def h_noncubic_sto3g():
         ),
         basis="sto-3g",
         a=(np.ones((3, 3)) - np.eye(3)) * L / 2,
-        spin=0,
+        spin=2*np.prod(nk),
         unit="bohr",
     )
     kpts = mol.make_kpts(nk)
-    mf = pyscf.pbc.scf.KRKS(mol, kpts)
+    mf = pyscf.pbc.scf.KUKS(mol, kpts)
     mf.xc = "pbe"
-    mf = pyscf.pbc.dft.multigrid.multigrid(mf)
+    #mf = pyscf.pbc.dft.multigrid.multigrid(mf)
     mf = mf.run()
+    print(mf.mo_occ)
     return mol, mf

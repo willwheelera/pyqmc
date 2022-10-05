@@ -5,18 +5,21 @@ import pyqmc.ewald as ewald
 import pyqmc.eval_ecp as eval_ecp
 
 
-def gradient_generator(mol, wf, to_opt=None, **ewald_kwargs):
+def gradient_generator(mol, wf, to_opt=None, nodal_cutoff=1e-3, **ewald_kwargs):
     return PGradTransform(
-        EnergyAccumulator(mol, **ewald_kwargs), LinearTransform(wf.parameters, to_opt)
+        EnergyAccumulator(mol, **ewald_kwargs),
+        LinearTransform(wf.parameters, to_opt),
+        nodal_cutoff=nodal_cutoff,
     )
 
 
 class EnergyAccumulator:
     """Returns local energy of each configuration in a dictionary."""
 
-    def __init__(self, mol, threshold=10, **kwargs):
+    def __init__(self, mol, threshold=10, naip=None, **kwargs):
         self.mol = mol
         self.threshold = threshold
+        self.naip = naip
         if hasattr(mol, "a"):
             self.coulomb = ewald.Ewald(mol, **kwargs)
             self.kinetic = energy.kinetic_pbc
@@ -26,8 +29,8 @@ class EnergyAccumulator:
 
     def __call__(self, configs, wf):
         ee, ei, ii = self.coulomb.energy(configs)
-        ecp_val = eval_ecp.ecp(self.mol, configs, wf, self.threshold)
-        ke, grad2 = self.kinetic(configs, wf)
+        ecp_val = eval_ecp.ecp(self.mol, configs, wf, self.threshold, self.naip)
+        ke, grad2 = energy.kinetic(configs, wf)
         return {
             "ke": ke,
             "ee": ee,
@@ -62,7 +65,10 @@ class LinearTransform:
 
     Note:
         to_opt[k] can't be boolean scalar; it has to be an array with the same dimension as parameters[k].
+
         to_opt doesn't have to have all the keys of parameters, but all keys of to_opt must be keys of parameters.
+
+        If you change wf.parameters, then all serializations will be out of date. For example, if you serialize, then change wf.paramaters, then deserialize, the deserialization will be incorrect.
     """
 
     def __init__(self, parameters, to_opt=None):
@@ -70,8 +76,6 @@ class LinearTransform:
         if to_opt is None:
             to_opt = {k: np.ones(p.shape, dtype=bool) for k, p in parameters.items()}
         self.to_opt = {k: o for k, o in to_opt.items() if np.any(o)}
-
-        self.frozen_parms = {k: parameters[k][~opt] for k, opt in self.to_opt.items()}
 
         self.shapes = {k: parameters[k].shape for k in self.to_opt}
         self.slices = {k: np.prod(s) for k, s in self.shapes.items()}
@@ -101,17 +105,25 @@ class LinearTransform:
         grads = np.concatenate(grads, axis=1)
         return np.concatenate((grads, grads[:, self.complex_inds] * 1j), axis=1)
 
-    def deserialize(self, parameters):
-        """Convert serialized parameters to dictionary"""
+    def deserialize(self, wf, parameters):
+        """Convert serialized parameters to dictionary.
+        Inputs:
+        wf object (this is needed to fill in the frozen parameters)
+        serialized parameters
+
+        output: dictionary with the unserialized parameters.
+        """
         n = 0
         m = self.nparams
         d = {}
+        frozen_parms = {k: gpu.asnumpy(wf.parameters[k])[~opt] for k, opt in self.to_opt.items()}
+
         for k, opt in self.to_opt.items():
             opt_ = opt.flatten()
             n_p = np.sum(opt_)
 
             flat_parms = np.zeros(self.slices[k], dtype=self.dtypes[k])
-            flat_parms[~opt_] = self.frozen_parms[k]
+            flat_parms[~opt_] = frozen_parms[k]
             flat_parms[opt_] = parameters[n : n + n_p]
             if self.complex[k]:
                 m_p = self.nimag[k]
@@ -123,25 +135,21 @@ class LinearTransform:
 
 
 class PGradTransform:
-    """   """
+    """ """
 
     def __init__(self, enacc, transform, nodal_cutoff=1e-3):
         self.enacc = enacc
         self.transform = transform
         self.nodal_cutoff = nodal_cutoff
 
-    def _node_regr(self, configs, wf):
+    def _node_regr(self, configs, grad2):
         """
         Return true if a given configuration is within nodal_cutoff
         of the node
         Also return the regularization polynomial if true,
-        f = a * r ** 2 + b * r ** 4 + c * r ** 3
+        f = a * r ** 2 + b * r ** 4 + c * r ** 6
         """
-        ne = configs.configs.shape[1]
-        d2 = 0.0
-        for e in range(ne):
-            d2 += np.sum(np.abs(wf.gradient(e, configs.electron(e))) ** 2, axis=0)
-        r = 1.0 / d2
+        r = 1.0 / grad2
         mask = r < self.nodal_cutoff ** 2
 
         c = 7.0 / (self.nodal_cutoff ** 6)
@@ -159,7 +167,7 @@ class PGradTransform:
         energy = d["total"]
         dp = self.transform.serialize_gradients(pgrad)
 
-        node_cut, f = self._node_regr(configs, wf)
+        node_cut, f = self._node_regr(configs, d["grad2"])
         dp_regularized = dp * f[:, np.newaxis]
 
         d["dpH"] = np.einsum("i,ij->ij", energy, dp_regularized)
@@ -183,7 +191,7 @@ class PGradTransform:
         energy = den["total"]
         dp = self.transform.serialize_gradients(pgrad)
 
-        node_cut, f = self._node_regr(configs, wf)
+        node_cut, f = self._node_regr(configs, den["grad2"])
 
         dp_regularized = dp * f[:, np.newaxis]
 

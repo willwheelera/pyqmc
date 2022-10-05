@@ -29,23 +29,23 @@ if __name__ == "__main__":
         pyqmc.recipes.VMC(
             "he_dft.hdf5",
             "he_sj_vmc.hdf5",
-            start_from="he_sj.hdf5",
+            load_parameters="he_sj.hdf5",
             accumulators={"rdm1": True},
             jastrow_kws=jastrow_kws,
             slater_kws=slater_kws,
-            vmc_kws={"nblocks": 40},
             client=client,
             npartitions=npartitions,
+            **{"nblocks": 40},
         )
 
         pyqmc.recipes.DMC(
             "he_dft.hdf5",
             "he_sj_dmc.hdf5",
-            start_from="he_sj.hdf5",
+            load_parameters="he_sj.hdf5",
             accumulators={"rdm1": True},
             jastrow_kws=jastrow_kws,
             slater_kws=slater_kws,
-            dmc_kws={"nsteps": 4000, "tstep": 0.02},
             client=client,
             npartitions=npartitions,
+            **{"nsteps": 4000, "tstep": 0.02},
         )

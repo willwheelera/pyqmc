@@ -2,6 +2,7 @@ import numpy as np
 import pyqmc.gpu as gpu
 import pyqmc.determinant_tools as determinant_tools
 import pyqmc.orbitals
+import warnings
 
 
 def sherman_morrison_row(e, inv, vec):
@@ -127,7 +128,7 @@ class Slater:
             self._nelec_k,
             self.orbitals,
         ) = pyqmc.orbitals.choose_evaluator_from_pyscf(
-            mol, mf, mc, twist=twist, determinants=determinants
+            mol, mf, mc, twist=twist, determinants=determinants, tol=self.tol
         )
 
         self.parameters = self.orbitals.parameters
@@ -162,19 +163,38 @@ class Slater:
             self._dets.append(
                 [gpu.cp.asarray(np.linalg.slogdet(m)) for m in mo]
             )  # spin, kpt, (sign, val), nconf
-            self._inverse.append(
-                [gpu.cp.linalg.inv(m) for m in mo]
-            )  # spin, kpt, nconf, nelec, nelec
+            is_zero = np.sum([np.abs(d[0]) for d in self._dets[s]])
+            compute = [np.isfinite(d[1]) for d in self._dets[s]]
+            if is_zero > 0:
+                warnings.warn(
+                    f"A wave function is zero. Found this proportion: {is_zero/nconf}"
+                )
+                print(f"zero {is_zero/np.prod(compute.shape)}")
+            self._inverse.append([gpu.cp.zeros(m.shape, dtype=m.dtype) for m in mo])
+            for i, m in enumerate(mo):
+                for d in range(compute[i].shape[1]):
+                    self._inverse[s][i][compute[i][:, d], d, :, :] = gpu.cp.linalg.inv(
+                        m[compute[i][:, d], d, :, :]
+                    )
         self._dets = gpu.cp.asarray(self._dets)
         return self.value()
 
-    def updateinternals(self, e, epos, mask=None):
+    def updateinternals(self, e, epos, configs, mask=None, saved_values=None):
         """Update any internals given that electron e moved to epos. mask is a Boolean array
         which allows us to update only certain walkers"""
 
         s = int(e >= self._nelec[0])
         if mask is None:
-            mask = [True] * epos.configs.shape[0]
+<<<<<<< HEAD
+            mask = np.ones(epos.configs.shape[0], dtype=bool)
+        is_zero = np.sum([np.isinf(d[1]) for d in self._dets[s]])
+        if is_zero:
+            warnings.warn(
+                "Found a zero in the wave function. Recomputing everything. This should not happen often."
+            )
+            self.recompute(configs)
+            return
+
         eeff = e - s * self._nelec[0]
         ki = epos.k_indices
         # How do we index the electron in the kpt?
@@ -252,10 +272,14 @@ class Slater:
         mo = self.orbitals.mos_single_elec(ao, s, epos.k_indices)[..., 0, :]
 
         ratios = gpu.asnumpy(self._testrowderiv(e, epos.k_indices, mo))
-        return ratios[1:] / ratios[0], ratios[0]
+        derivatives = ratios[1:] / ratios[0]
+        derivatives[~np.isfinite(derivatives)] = 0.0
+        values = ratios[0]
+        values[~np.isfinite(values)] = 1.0
+        return derivatives, values, None
 
     def laplacian(self, e, epos):
-        """ Compute the laplacian Psi/ Psi. """
+        """Compute the laplacian Psi/ Psi."""
         s = int(e >= self._nelec[0])
         ao = self.orbitals.aos("GTOval_sph_deriv2", epos)
         ao = gpu.cp.concatenate(
@@ -324,16 +348,25 @@ class Slater:
 
         # Det coeff
         curr_val = self.value()
-        d["det_coeff"] = (
-            self._dets[0][0, :, self._det_map[0]]
-            * self._dets[1][0, :, self._det_map[1]]
+        nonzero = curr_val[0] != 0.0
+
+        # dets[spin][ (phase,log), configuration, determinant]
+        dets = (
+            self._dets[0][:, :, self._det_map[0]],
+            self._dets[1][:, :, self._det_map[1]],
+        )
+
+        d["det_coeff"] = gpu.cp.zeros(dets[0].shape[1:], dtype=dets[0].dtype)
+        d["det_coeff"][nonzero, :] = (
+            dets[0][0, nonzero, :]
+            * dets[1][0, nonzero, :]
             * gpu.cp.exp(
-                self._dets[0][1, :, self._det_map[0]]
-                + self._dets[1][1, :, self._det_map[1]]
-                - gpu.cp.array(curr_val[1])
+                dets[0][1, nonzero, :]
+                + dets[1][1, nonzero, :]
+                - gpu.cp.array(curr_val[1][nonzero, np.newaxis])
             )
-            / gpu.cp.array(curr_val[0])
-        ).T
+            / gpu.cp.array(curr_val[0][nonzero, np.newaxis])
+        )
 
         for s, parm in zip([0, 1], ["mo_coeff_alpha", "mo_coeff_beta"]):
             ao = self._aovals[
@@ -365,6 +398,11 @@ class Slater:
                     * coeff
                     * d["det_coeff"][:, di, np.newaxis, np.newaxis]
                 )
+
         for k, v in d.items():
             d[k] = gpu.asnumpy(v)
+
+        for k in list(d.keys()):
+            if np.prod(d[k].shape) == 0:
+                del d[k]
         return d
