@@ -19,13 +19,15 @@ class EnergyAccumulator:
         self.threshold = threshold
         if hasattr(mol, "a"):
             self.coulomb = ewald.Ewald(mol, **kwargs)
+            self.kinetic = energy.kinetic_pbc
         else:
             self.coulomb = energy.OpenCoulomb(mol, **kwargs)
+            self.kinetic = energy.kinetic
 
     def __call__(self, configs, wf):
         ee, ei, ii = self.coulomb.energy(configs)
         ecp_val = eval_ecp.ecp(self.mol, configs, wf, self.threshold)
-        ke, grad2 = energy.kinetic(configs, wf)
+        ke, grad2 = self.kinetic(configs, wf)
         return {
             "ke": ke,
             "ee": ee,

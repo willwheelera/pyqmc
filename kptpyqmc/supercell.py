@@ -2,17 +2,17 @@ import numpy as np
 import pyqmc
 
 
-def get_supercell_kpts(supercell):
-    Sinv = np.linalg.inv(supercell.S).T
+def get_supercell_kpts(latvec, S):
+    Sinv = np.linalg.inv(S).T
     u = [0, 1]
     unit_box = np.stack([x.ravel() for x in np.meshgrid(*[u] * 3, indexing="ij")]).T
-    unit_box_ = np.dot(unit_box, supercell.S.T)
+    unit_box_ = np.dot(unit_box, S.T)
     xyz_range = np.stack([f(unit_box_, axis=0) for f in (np.amin, np.amax)]).T
     kptmesh = np.meshgrid(*[np.arange(*r) for r in xyz_range], indexing="ij")
     possible_kpts = np.dot(np.stack([x.ravel() for x in kptmesh]).T, Sinv)
     in_unit_box = (possible_kpts >= 0) * (possible_kpts < 1 - 1e-12)
     select = np.where(np.all(in_unit_box, axis=1))[0]
-    reclatvec = np.linalg.inv(supercell.original_cell.lattice_vectors()).T * 2 * np.pi
+    reclatvec = np.linalg.inv(latvec).T * 2 * np.pi
     return np.dot(possible_kpts[select], reclatvec)
 
 

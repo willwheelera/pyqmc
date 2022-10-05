@@ -50,3 +50,15 @@ def kinetic(configs, wf):
         ke += -0.5 * lap.real
         grad2 += np.sum(np.abs(grad) ** 2, axis=0)
     return ke, grad2
+
+
+def kinetic_pbc(configs, wf):
+    nconf, nelec, ndim = configs.configs.shape
+    ke = np.zeros(nconf)
+    grad2 = np.zeros(nconf)
+    for e in range(nelec):
+        grad, lap = wf.gradient_laplacian(e, configs.electron(e))
+        kpt = wf.orbitals._kpts[configs.k_indices[e]]
+        ke += -0.5 * (lap.real + 2 * np.einsum("i,i...->i...", kpt, grad).real + np.sum(kpt**2))
+        grad2 += np.sum(np.abs(grad) ** 2, axis=0)
+    return ke, grad2

@@ -40,8 +40,13 @@ def test_updateinternals(wf, configs):
         ratio = wf.testvalue(e, epos)
         wf.updateinternals(e, epos)
         update = wf.value()
+        print(update[0].shape, update[1].shape)
         configs.move(e, epos, [True] * nconf)
         recompute = wfcopy.recompute(configs)
+
+        print(e, ratio)
+        print(e, update[0] / val1[0] * np.exp(update[1] - val1[1]))
+
         updatevstest[e, :] = update[0] / val1[0] * np.exp(update[1] - val1[1]) - ratio
         recomputevsupdate[e, :] = update[0] / val1[0] * np.exp(
             update[1] - val1[1]
@@ -52,16 +57,16 @@ def test_updateinternals(wf, configs):
         val1 = recompute
 
     # Test mask and pgrad
-    _, configs = mc.vmc(wf, configs, nblocks=1, nsteps_per_block=1, tstep=2)
-    pgradupdate = wf.pgradient()
-    wf.recompute(configs)
-    pgrad = wf.pgradient()
-    pgdict = {k: np.max(np.abs(pgu - pgrad[k])) for k, pgu in pgradupdate.items()}
+    #_, configs = mc.vmc(wf, configs, nblocks=1, nsteps_per_block=1, tstep=2)
+    #pgradupdate = wf.pgradient()
+    #wf.recompute(configs)
+    #pgrad = wf.pgradient()
+    #pgdict = {k: np.max(np.abs(pgu - pgrad[k])) for k, pgu in pgradupdate.items()}
     return {
         "updatevstest": np.max(np.abs(updatevstest)),
         "recomputevstest": np.max(np.abs(recomputevstest)),
         "recomputevsupdate": np.max(np.abs(recomputevsupdate)),
-        **pgdict,
+        #**pgdict,
     }
 
 

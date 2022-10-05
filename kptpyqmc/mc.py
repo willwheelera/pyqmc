@@ -9,7 +9,7 @@ import numpy as np
 import h5py
 
 
-def initial_guess(mol, nconfig, r=1.0):
+def initial_guess(mol, nconfig, r=1.0, nk=1):
     """Generate an initial guess by distributing electrons near atoms
     proportional to their charge.
 
@@ -24,11 +24,12 @@ def initial_guess(mol, nconfig, r=1.0):
     :rtype: ndarray
 
     """
-    from pyqmc.coord import OpenConfigs, PeriodicConfigs
+    from kptpyqmc.coord import KptConfigs
 
-    epos = np.zeros((nconfig, np.sum(mol.nelec), 3))
+    epos = np.zeros((nconfig, np.sum(mol.nelec) * nk, 3))
     wts = mol.atom_charges()
     wts = wts / np.sum(wts)
+    k_indices = np.zeros(epos.shape[1], dtype=int)
 
     for s in [0, 1]:
         neach = np.array(
@@ -39,22 +40,24 @@ def initial_guess(mol, nconfig, r=1.0):
         )  # fraction of electron unassigned on each atom
         nassigned = np.sum(neach)  # number of electrons assigned
         totleft = int(mol.nelec[s] - nassigned)  # number of electrons not yet assigned
-        ind0 = s * mol.nelec[0]
-        epos[:, ind0 : ind0 + nassigned, :] = np.repeat(
-            mol.atom_coords(), neach, axis=0
-        )  # assign core electrons
-        if totleft > 0:
-            bins = np.cumsum(nleft) / totleft
-            inds = np.argpartition(
-                np.random.random((nconfig, len(wts))), totleft, axis=1
-            )[:, :totleft]
-            epos[:, ind0 + nassigned : ind0 + mol.nelec[s], :] = mol.atom_coords()[
-                inds
-            ]  # assign remaining electrons
+        for ki in range(nk):
+            ind0 = nk * s * mol.nelec[0] + ki * mol.nelec[s]
+            epos[:, ind0 : ind0 + nassigned, :] = np.repeat(
+                mol.atom_coords(), neach, axis=0
+            )  # assign core electrons
+            k_indices[ind0:ind0+nassigned] = ki
+            if totleft > 0:
+                bins = np.cumsum(nleft) / totleft
+                inds = np.argpartition(
+                    np.random.random((nconfig, len(wts))), totleft, axis=1
+                )[:, :totleft]
+                epos[:, ind0 + nassigned : ind0 + mol.nelec[s], :] = mol.atom_coords()[
+                    inds
+                ]  # assign remaining electrons
 
     epos += r * np.random.randn(*epos.shape)  # random shifts from atom positions
     if hasattr(mol, "a"):
-        epos = PeriodicConfigs(epos, mol.lattice_vectors())
+        epos = KptConfigs(epos, mol.lattice_vectors(), nk=nk, k_indices=k_indices)
     else:
         epos = OpenConfigs(epos)
     return epos

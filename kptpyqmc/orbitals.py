@@ -1,9 +1,9 @@
 import numpy as np
-import pyqmc.gpu as gpu
-import pyqmc.pbc as pbc
-import pyqmc.supercell as supercell
-import pyqmc.pbc_eval_gto as pbc_eval_gto
-import pyqmc.determinant_tools
+import kptpyqmc.gpu as gpu
+import kptpyqmc.pbc as pbc
+import kptpyqmc.supercell as supercell
+import kptpyqmc.pbc_eval_gto as pbc_eval_gto
+import kptpyqmc.determinant_tools
 
 """
 The evaluators have the concept of a 'set' of atomic orbitals, that may apply to 
@@ -68,9 +68,9 @@ class MoleculeOrbitalEvaluator:
         """
         obj = mc if hasattr(mc, "mo_coeff") else mf
         if mc is not None:
-            detcoeff, occup, det_map = pyqmc.determinant_tools.interpret_ci(mc, tol)
+            detcoeff, occup, det_map = kptpyqmc.determinant_tools.interpret_ci(mc, tol)
         elif determinants is not None:
-            detcoeff, occup, det_map = pyqmc.determinant_tools.create_packed_objects(
+            detcoeff, occup, det_map = kptpyqmc.determinant_tools.create_packed_objects(
                 determinants, tol, format="list"
             )
         else:
@@ -128,6 +128,20 @@ def get_k_indices(cell, mf, kpts, tol=1e-6):
     frac_kdiffs = np.dot(kdiffs, cell.lattice_vectors().T) / (2 * np.pi)
     kdiffs = np.mod(frac_kdiffs + 0.5, 1) - 0.5
     return np.nonzero(np.linalg.norm(kdiffs, axis=-1) < tol)[1]
+
+
+def compute_nelec_k(mf, kinds):
+    if len(mf.mo_coeff[0][0].shape) == 2:
+        nelec_k = [
+            [np.count_nonzero(mf.mo_occ[spin][k] > 0.5) for k in kinds]
+            for spin in [0, 1]
+        ]
+    elif len(mf.mo_coeff[0][0].shape) == 1:
+        nelec_k = [
+            [[list(np.argwhere(mf.mo_occ[k] > 1.5 - spin)[:, 0])] for k in kinds]
+            for spin in [0, 1]
+        ]
+    return list(zip(*nelec_k))
 
 
 def pbc_single_determinant(mf, kinds):
@@ -197,7 +211,7 @@ class PBCOrbitalEvaluatorKpoints:
         self._cell = cell.original_cell
         self.S = cell.S
 
-        self._kpts = [0, 0, 0] if kpts is None else kpts
+        self._kpts = [[0, 0, 0]] if kpts is None else kpts
         self.param_split = [
             np.cumsum(np.asarray([m.shape[1] for m in mo_coeff[spin]]))
             for spin in [0, 1]
@@ -232,7 +246,7 @@ class PBCOrbitalEvaluatorKpoints:
         else:
             twist = np.dot(np.linalg.inv(cell.a), np.mod(twist, 1.0)) * 2 * np.pi
         kinds = list(
-            set(get_k_indices(cell, mf, supercell.get_supercell_kpts(cell) + twist))
+            set(get_k_indices(cell, mf, supercell.get_supercell_kpts(cell.original_cell.lattice_vectors(), cell.S) + twist))
         )
         if len(kinds) != cell.scale:
             raise ValueError(
@@ -242,11 +256,11 @@ class PBCOrbitalEvaluatorKpoints:
 
         if determinants is None:
             determinants = [
-                (1.0, pyqmc.determinant_tools.create_pbc_determinant(cell, mf, []))
+                (1.0, kptpyqmc.determinant_tools.create_pbc_determinant(cell, mf, []))
             ]
 
         mo_coeff, determinants_flat = select_orbitals_kpoints(determinants, mf, kinds)
-        detcoeff, occup, det_map = pyqmc.determinant_tools.create_packed_objects(
+        detcoeff, occup, det_map = kptpyqmc.determinant_tools.create_packed_objects(
             determinants_flat, format="list"
         )
 
@@ -254,7 +268,8 @@ class PBCOrbitalEvaluatorKpoints:
             detcoeff,
             occup,
             det_map,
-            PBCOrbitalEvaluatorKpoints(cell, mo_coeff, kpts),
+            compute_nelec_k(mf, kinds),
+            PBCOrbitalEvaluatorKpoints(cell.original_cell, mo_coeff, kpts),
         )
 
     def nmo(self):
@@ -270,34 +285,30 @@ class PBCOrbitalEvaluatorKpoints:
         if a derivative is requested, will instead return [k,d,...,orbital]
         """
         mycoords = configs.configs if mask is None else configs.configs[mask]
-        mycoords = mycoords.reshape((-1, mycoords.shape[-1]))
-        # coordinate, dimension
         wrap = configs.wrap if mask is None else configs.wrap[mask]
         wrap = np.dot(wrap, self.S)
-        wrap = wrap.reshape((-1, wrap.shape[-1]))
-        kdotR = np.linalg.multi_dot(
-            (self._kpts, self._cell.lattice_vectors().T, wrap.T)
-        )
-        # k, coordinate
+
+        kL = np.dot(self._kpts, configs.lvecs.T)
+        kdotR = np.einsum("...k,i...k->i...", kL[configs.k_indices], wrap)
+
         wrap_phase = get_wrapphase_complex(kdotR)
-        # k,coordinate, orbital
-        ao = gpu.cp.asarray(
-            pbc_eval_gto.eval_gto(
-                self._cell,
-                "PBC" + eval_str,
-                mycoords,
-                kpts=self._kpts,
-                Ls=self.Ls,
-                rcut=self.rcut,
-            )
-        )
-        ao = gpu.cp.einsum("k...,k...a->k...a", wrap_phase, ao)
-        if len(ao.shape) == 4:  # if derivatives are included
-            return ao.reshape(
-                (ao.shape[0], ao.shape[1], *mycoords.shape[:-1], ao.shape[-1])
-            )
-        else:
-            return ao.reshape((ao.shape[0], *mycoords.shape[:-1], ao.shape[-1]))
+        nao = self._cell.nao_nr()
+        select = [configs.k_indices == i for i in range(len(self._kpts))]
+        ao = [
+            gpu.cp.asarray(
+                pbc_eval_gto.eval_gto(
+                    self._cell,
+                    "PBC" + eval_str,
+                    mycoords[:, sel].reshape(-1, 3),
+                    kpt=kpt,
+                    Ls=self.Ls,
+                    rcut=self.rcut,
+                )
+            ).reshape(-1, mycoords.shape[0], sel.sum(), nao)
+            * wrap_phase[..., sel, np.newaxis]
+            for kpt, sel in zip(self._kpts, select) if sel.sum() > 0
+        ]
+        return ao
 
     def mos(self, ao, spin):
         """ao should be [k,[d],...,ao].
@@ -310,9 +321,21 @@ class PBCOrbitalEvaluatorKpoints:
             self.param_split[spin],
             axis=-1,
         )
-        return gpu.cp.concatenate(
-            [ak.dot(mok) for ak, mok in zip(ao, p[0:-1])], axis=-1
+        return [ak.dot(mok) for ak, mok in zip(ao, p[0:-1])]
+
+    def mos_single_elec(self, ao, spin, ki):
+        """ao should be [[d],...,ao].
+        ki is the index of the kpt to evaluate MOs
+        Returns a concatenated list of all molecular orbitals in form [..., mo]
+
+        In the derivative case, returns [d,..., mo]
+        """
+        p = np.split(
+            self.parameters[f"mo_coeff{self.parm_names[spin]}"],
+            self.param_split[spin],
+            axis=-1,
         )
+        return ao[0].dot(p[ki])
 
     def pgradient(self, ao, spin):
         """
