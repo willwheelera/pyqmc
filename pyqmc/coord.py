@@ -1,6 +1,6 @@
 import numpy as np
-import kptpyqmc.distance as distance
-import kptpyqmc.pbc as pbc
+import pyqmc.distance as distance
+import pyqmc.pbc as pbc
 import copy
 
 

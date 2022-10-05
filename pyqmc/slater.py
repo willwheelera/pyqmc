@@ -1,7 +1,7 @@
 import numpy as np
-import kptpyqmc.gpu as gpu
-import kptpyqmc.determinant_tools as determinant_tools
-import kptpyqmc.orbitals
+import pyqmc.gpu as gpu
+import pyqmc.determinant_tools as determinant_tools
+import pyqmc.orbitals
 
 
 def sherman_morrison_row(e, inv, vec):
@@ -126,7 +126,7 @@ class Slater:
             self._det_map,
             self._nelec_k,
             self.orbitals,
-        ) = kptpyqmc.orbitals.choose_evaluator_from_pyscf(
+        ) = pyqmc.orbitals.choose_evaluator_from_pyscf(
             mol, mf, mc, twist=twist, determinants=determinants
         )
 

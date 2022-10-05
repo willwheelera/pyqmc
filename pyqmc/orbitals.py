@@ -1,9 +1,9 @@
 import numpy as np
-import kptpyqmc.gpu as gpu
-import kptpyqmc.pbc as pbc
-import kptpyqmc.supercell as supercell
-import kptpyqmc.pbc_eval_gto as pbc_eval_gto
-import kptpyqmc.determinant_tools
+import pyqmc.gpu as gpu
+import pyqmc.pbc as pbc
+import pyqmc.supercell as supercell
+import pyqmc.pbc_eval_gto as pbc_eval_gto
+import pyqmc.determinant_tools
 
 """
 The evaluators have the concept of a 'set' of atomic orbitals, that may apply to 
@@ -68,9 +68,9 @@ class MoleculeOrbitalEvaluator:
         """
         obj = mc if hasattr(mc, "mo_coeff") else mf
         if mc is not None:
-            detcoeff, occup, det_map = kptpyqmc.determinant_tools.interpret_ci(mc, tol)
+            detcoeff, occup, det_map = pyqmc.determinant_tools.interpret_ci(mc, tol)
         elif determinants is not None:
-            detcoeff, occup, det_map = kptpyqmc.determinant_tools.create_packed_objects(
+            detcoeff, occup, det_map = pyqmc.determinant_tools.create_packed_objects(
                 determinants, tol, format="list"
             )
         else:
@@ -256,11 +256,11 @@ class PBCOrbitalEvaluatorKpoints:
 
         if determinants is None:
             determinants = [
-                (1.0, kptpyqmc.determinant_tools.create_pbc_determinant(cell, mf, []))
+                (1.0, pyqmc.determinant_tools.create_pbc_determinant(cell, mf, []))
             ]
 
         mo_coeff, determinants_flat = select_orbitals_kpoints(determinants, mf, kinds)
-        detcoeff, occup, det_map = kptpyqmc.determinant_tools.create_packed_objects(
+        detcoeff, occup, det_map = pyqmc.determinant_tools.create_packed_objects(
             determinants_flat, format="list"
         )
 

@@ -24,7 +24,7 @@ def initial_guess(mol, nconfig, r=1.0, nk=1):
     :rtype: ndarray
 
     """
-    from kptpyqmc.coord import KptConfigs
+    from pyqmc.coord import KptConfigs
 
     epos = np.zeros((nconfig, np.sum(mol.nelec) * nk, 3))
     wts = mol.atom_charges()
