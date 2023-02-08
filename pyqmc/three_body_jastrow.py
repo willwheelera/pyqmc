@@ -63,29 +63,35 @@ class ThreeBodyJastrow:
         self._configscurrent = configs.copy()
         nconf, nelec = configs.configs.shape[:2]
         na = len(self.a_basis)
+        nb = len(self.b_basis)
+        nup = self._mol.nelec[0]
 
         # electron-ion distances
-        di = np.zeros((nelec, nconf, self._mol.natm, 3))
-        for e, epos in enumerate(configs.configs.swapaxes(0, 1)):
-            di[e] = configs.dist.dist_i(self._mol.atom_coords(), epos)
+        di = configs.dist.dist_i(self._mol.atom_coords(), configs.configs)
         ri = np.linalg.norm(di, axis=-1)
 
         a_values = np.zeros((self._nelec, nconf, self._mol.natm, na))
         for i, a in enumerate(self.a_basis):
-            # di dim nconf,I,nelec
             a_values[:, :, :, i] = a.value(di, ri)
+
+        # electron-electron distances
+        de, ij = configs.dist.dist_matrix(configs.configs)
+        ij = tuple(zip(*ij))
+        re = np.linalg.norm(de, axis=-1)
+        b_values = np.zeros((self._nelec, self._nelec, nconf, nb))
+        for i, b in enumerate(self.b_basis):
+            b_values[:, :, :, i][ij] = b.value(de, re).T
+        b_values += b_values.swapaxes(0, 1)
 
         self.C = (
             self.parameters["ccoeff"] + self.parameters["ccoeff"].swapaxes(1, 2)
         ) / 2
 
         self.P_i = np.zeros((nelec, nconf))
-        arange_e = np.arange(nelec)
-        for e, epos in enumerate(configs.configs.swapaxes(0, 1)):
-            not_e = arange_e != e
-            self.P_i[e] = self.single_e_partial(configs, e, epos, a_values[not_e])[
-                0
-            ].sum(axis=0)
+        self.P_i[:nup] += np.einsum("Iklm,enIk,fnIl,efnm->en", self.C[..., 0], a_values[:nup], a_values[:nup], b_values[:nup, :nup])
+        self.P_i[:nup] += np.einsum("Iklm,enIk,fnIl,efnm->en", self.C[..., 1], a_values[:nup], a_values[nup:], b_values[:nup, nup:])
+        self.P_i[nup:] += np.einsum("Iklm,enIk,fnIl,efnm->fn", self.C[..., 1], a_values[:nup], a_values[nup:], b_values[:nup, nup:])
+        self.P_i[nup:] += np.einsum("Iklm,enIk,fnIl,efnm->en", self.C[..., 2], a_values[nup:], a_values[nup:], b_values[nup:, nup:])
 
         self.val = 0.5 * self.P_i.sum(axis=0)
         self.a_values = a_values
