@@ -12,8 +12,13 @@ class RawDistance:
         # a ([m,] n, 3)
         # b (m, 3)
         # returns shape (m, n, 3)
-        assert len(b.shape) <= 2, f"dist_i argument b has {len(b.shape)} dimensions -- can have max 2"
-        return b[:, np.newaxis, :] - a
+
+        #assert len(b.shape) <= 2, f"dist_i argument b has {len(b.shape)} dimensions -- can have max 2"
+        if len(b.shape)==2:
+            return b[:, np.newaxis, :] - a
+        else:
+            b = b.swapaxes(0, 1)
+            return b[:, :, np.newaxis, :] - a
 
     def dist_matrix(self, configs):
         """
