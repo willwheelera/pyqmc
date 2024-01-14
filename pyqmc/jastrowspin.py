@@ -388,7 +388,7 @@ class JastrowSpin:
             "...jk,jk->...", deltab, self.parameters["bcoeff"][:, edown : edown + 2]
         )
         val = gpu.cp.exp(b_val + a_val)
-        if len(val.shape) == 2:
+        if len(val.shape) == 2: # for ecp (naip, nconf)
             val = val.T
         return gpu.asnumpy(val), (aupdate, bupdate, savedbvals)
 
