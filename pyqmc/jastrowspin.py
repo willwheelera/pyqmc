@@ -122,9 +122,13 @@ class JastrowSpin:
               epos: configs object for electron e
               mask: mask over configs axis, only return values for configs where mask==True. a_partial_e might have a smaller configs axis than epos, _configscurrent, and _a_partial because of the mask.
         """
+        has_aux_pts = len(epos.configs.shape) == 3 # aux  points for ecp integral
+        distf = epos.dist.dist_i if not has_aux_pts else epos.dist.pairwise
         d = gpu.cp.asarray(
-            epos.dist.dist_i(self._mol.atom_coords(), epos.configs[mask])
+            distf(self._mol.atom_coords()[np.newaxis], epos.configs[mask])
         )
+        if has_aux_pts: # move aux axis to 0 for broadcasting
+            d = gpu.cp.moveaxis(d, 2, 0)
         r = gpu.cp.linalg.norm(d, axis=-1)
         a_partial_e = gpu.cp.zeros((*r.shape, self._a_partial.shape[3]))
         for k, a in enumerate(self.a_basis):
@@ -144,22 +148,19 @@ class JastrowSpin:
         nup = self._mol.nelec[0]
         sep = nup - int(e < nup)
         not_e = np.arange(self._nelec) != e
+        has_aux_pts = len(epos.configs.shape) == 3 # aux  points for ecp integral
+        distf = epos.dist.dist_i if not has_aux_pts else epos.dist.pairwise
         d = gpu.cp.asarray(
-            epos.dist.dist_i(
-                self._configscurrent.configs[mask][:, not_e], epos.configs[mask]
-            )
+            distf(self._configscurrent.configs[mask][:, not_e], epos.configs[mask])
         )
+        if has_aux_pts: # move aux axis to 0 for broadcasting
+            d = gpu.cp.moveaxis(d, 2, 0)
         r = gpu.cp.linalg.norm(d, axis=-1)
         b_partial_e = gpu.cp.zeros((*r.shape[:-1], *self._b_partial.shape[2:]))
 
         bvals = gpu.cp.stack([b.value(d, r) for b in self.b_basis], axis=-2)
         b_partial_e[..., 0] = bvals[..., :sep].sum(axis=-1)
         b_partial_e[..., 1] = bvals[..., sep:].sum(axis=-1)
-
-        # for l, b in enumerate(self.b_basis):
-        #    bval = b.value(d, r)
-        #    b_partial_e[..., l, 0] = bval[..., :sep].sum(axis=-1)
-        #    b_partial_e[..., l, 1] = bval[..., sep:].sum(axis=-1)
 
         return b_partial_e, bvals
 
