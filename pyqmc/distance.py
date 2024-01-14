@@ -54,10 +54,7 @@ class RawDistance:
         assert m1 == m2 or m1 == 1 or m2 == 1, f"can't broadcast first axis {m1} and {m2}"
         if n1 == 0 or n2 == 0:
             return np.zeros((config1.shape[0], 0, 3))
-        vs = np.zeros((max(m1, m2), n1, n2, 3))
-        for i in range(n2):
-            vs[:, :, i] = self.dist_i(config1, config2[:, i, :])
-        return vs
+        return config2[:, np.newaxis] - config1[:, :, np.newaxis]
 
 
 def _is_diagonal(M, tol):
@@ -105,6 +102,23 @@ class MinimalImageDistance(RawDistance):
         # returns shape (m, n, 3)
         assert len(b.shape) <= 2, f"dist_i argument b has {len(b.shape)} dimensions -- can have max 2"
         return self._minimal_dist(b[:, np.newaxis, :] - a)
+
+    def pairwise(self, config1, config2):
+        """
+        All pairwise distances from config1 to config2
+        Parameters:
+            config1 (m1, n1, 3): m1 may be 1, e.g. for all atoms to all electrons
+            config2 (m2, n2, 3): m2 must equal m1 if neither equals 1
+        Returns:
+
+          dist: array (nconf, n1, n2, 3)
+        """
+        m1, n1 = config1.shape[:2]
+        m2, n2 = config2.shape[:2]
+        assert m1 == m2 or m1 == 1 or m2 == 1, f"can't broadcast first axis {m1} and {m2}"
+        if n1 == 0 or n2 == 0:
+            return np.zeros((config1.shape[0], 0, 3))
+        return self._minimal_dist(config2[:, np.newaxis] - config1[:, :, np.newaxis])
 
     def general_dist(self, d1):
         """returns a list of electron-electron distances from an electron at position 'vec'
