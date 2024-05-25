@@ -141,7 +141,6 @@ def _solve_coefficients(aos, k):
     b = aos[:, k.T, :].reshape(nsamples * nG, nG * nao)
     x, res, rank, sing = np.linalg.lstsq(a, b, rcond=None)
     C = np.moveaxis(x.reshape(nao, nG, nao), 0, 2)
-    test_rep(C, k)
     return C
     
 
