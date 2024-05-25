@@ -182,6 +182,7 @@ def test_wf_pgradient(wf, configs, delta=1e-5):
     gradient = wf.pgradient()
     error = {}
     for k in gradient.keys():  # We only check the gradients that are exposed.
+        if gradient[k].size == 0: continue
         flt = wf.parameters[k].reshape(-1)
         # print(flt.shape,wf.parameters[k].shape,gradient[k].shape)
         nparms = len(flt)
@@ -202,6 +203,7 @@ def test_wf_pgradient(wf, configs, delta=1e-5):
 
         pgerr = np.abs(gradient[k].reshape((-1, nparms)) - numgrad)
         error[k] = np.amax(pgerr)
+        print(k, error[k])
 
     if len(error) == 0:
         return (0, 0)
