@@ -18,7 +18,6 @@ import pyqmc.determinant_tools as determinant_tools
 import pyqmc.orbitals
 import pyqmc.pyscftools
 import pyqmc.slater as slater
-import pyqmc.slater as slater
 import pyqmc.symmetry_basis as symmetry_basis
 import warnings
 
@@ -146,6 +145,11 @@ class IrrepSlater(slater.Slater):
         Let's suppose that j corresponds to an up orbital coefficient. Then
         dj (Dui Ddi) = (dj Dui)/Dui Dui Ddi/psi = (dj Dui)/Dui di psi/psi
         where di psi/psi is the derivative defined above.
+
+        M_{ac} = sum_b B_{ab} m_{bc}
+        dM_{ac} / dm_{bc} = B_{ab}
+        dPsi/dm_{bc} = sum_a dPsi/dM_{ac} dM_{ac}/dm{bc}
+                     = sum_a dPsi/dM_{ac} B_{ab}
         """
         d = super().pgradient()
         for s, alpha in enumerate(["mo_coeff_alpha", "mo_coeff_beta"]):
