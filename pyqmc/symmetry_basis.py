@@ -45,6 +45,7 @@ import scipy
 import pyqmc.api as pyq
 from pyscf import gto, scf
 
+
 def id_mo_irreps(mol, xyz_rep, character, mo_coeff0, ovlp):
     """
     mol: the pyscf mol or cell
@@ -71,24 +72,50 @@ def id_mo_irreps(mol, xyz_rep, character, mo_coeff0, ovlp):
 
     SV = ovlp @ mo_coeff0
     mo_rep_diag = np.zeros((nG, nao)) # diagonal of mo representation of G
+    ao_irrep_basis = np.zeros((nao, nao))
+    irrep_indicator = np.zeros((len(character), nao), dtype=bool)
+    counter = 0
 
     # each tag is invariant under G and has its own representation
     # search_ao_label(tag) gives the indices for that tag
+    Ssum = 0.
     tags = make_tags(ao_labels) # e.g. "H 2p"
     for tag in tags:
         inds = mol.search_ao_label(tag)
         tag_ao_rep = _solve_coefficients(aos[:, :, inds], k)
+        # For MO basis
         SVinds = SV[inds]
         mc0inds = mo_coeff0[inds]
         mo_rep_diag += np.einsum("im,gij,jm->gm", mc0inds.conj(), tag_ao_rep, SVinds)
+        # For AO basis
+        # project AO basis onto irreps. In AO basis, the elements are the identity matrix
+        # projection P = \sum_g \chi_g C_g v; columns are the projected vectors in AO basis
+        # Acting with the group elements is tag_ao_rep @ I = tag_ao_rep
+        tag_ovlp = ovlp[inds][:, inds]
+        dotprod = np.einsum("rg,gij,jk->rik", character, tag_ao_rep, tag_ovlp)
+        dotprod *= character[:, :1, np.newaxis]/ nG
+        # projection will have zero eigenvalues, SVD to remove
+        # we don't want parameters in AO basis, want a good basis -> use U, discard V (Q: why not use V instead?)
+        U, S, Vh = np.linalg.svd(dotprod)
+        select = S > 1e-8
+        print("S", S.sum())
+        Ssum += S.sum()
+        tmp = ao_irrep_basis[inds]
+        counter = 0
+        for i, (u, sel) in enumerate(zip(U, select)): # for each irrep
+            print(tag, "u", np.linalg.norm(u[:, sel])**2, "z", inds[sel])
+            sel_inds = inds[counter:counter+sel.sum()]
+            counter += sel.sum()
+            irrep_indicator[i, sel_inds] = 1
+            tmp[:, sel_inds] = u[:, sel]
+        ao_irrep_basis[inds] = tmp
+
+    # For MO basis
     dotprod = np.einsum("rg,gj->rj", character, mo_rep_diag) * character[:, :1]/ nG
-    #print(np.around(dotprod.T, 1))
-    #print(np.sum(dotprod, axis=0)); quit()
     irrep_indicator = dotprod > 1e-12
-    # not sure these are needed:
-    #irrep_list = [np.nonzero(ind)[0] for ind in irrep_indicator] # the lists will be different lengths
-    #irrep_mo = np.argmax(irrep_indicator, axis=0) # irrep_mo[mo] = irrep
-    return irrep_indicator
+    # For AO basis
+
+    return irrep_indicator, ao_irrep_basis
     
 
 def recompute_mo_coeffs(self, mo_coeff0, occ, irrep_indicator, params):
@@ -181,7 +208,7 @@ def organize_block_diagonal(A):
     B = A.copy()
     current_col = 0
     end_permutation = np.arange(len(A))
-    blocksizes = []
+    blocksizes = [0]
     for i, row in enumerate(A):
         permutation, current_col, blocksize = _arrange_row(B[i], current_col)
         B = B[permutation][:, permutation]
