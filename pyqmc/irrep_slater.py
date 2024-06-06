@@ -94,7 +94,7 @@ class IrrepSlater(slater.Slater):
         eye = np.eye(len(ovlp))
         for s, alpha in enumerate(["mo_coeff_alpha", "mo_coeff_beta"]):
             self.irrep_selector[s] = symmetry_basis.id_mo_irreps(
-                mol, group_operations, character_table, self.mo0[s], ovlp
+                mol, group_operations, ovlp, self.mo0[s], character_table
             )
             nmo = self.orbitals.parameters[alpha].shape[1] # how many mos we store
             self.mo_irrep_selector[alpha] = np.zeros((n_irrep, nmo), dtype=bool)

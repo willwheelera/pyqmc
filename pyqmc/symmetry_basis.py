@@ -46,16 +46,9 @@ import pyqmc.api as pyq
 from pyscf import gto, scf
 
 
-def id_mo_irreps(mol, xyz_rep, character, mo_coeff0, ovlp):
+def generate_tags_aos(mol, xyz_rep):
     """
-    mol: the pyscf mol or cell
-    xyz_rep: group representation on R^3 (|G|, 3, 3)
-    character: character table (n_irrep, |G|)
-    mo_coeff0: starting/input MOs
-    ovlp: from mf.get_ovlp()
 
-    returns:
-        irrep_indicator (n_irrep, nao) boolean array indexing MOs
     """
     nG = len(xyz_rep)
     ao_labels = mol.ao_labels()
@@ -67,19 +60,30 @@ def id_mo_irreps(mol, xyz_rep, character, mo_coeff0, ovlp):
     # sample points to solve for AO representation
     r = pyq.initial_guess(mol, (nsamples+1) // nelec + 1).configs.reshape(-1, 3)[:nsamples]
     gr = np.einsum("gij,kj->kgi", xyz_rep, r)
-    aos = mol.eval_gto("GTOval_sph", gr.reshape(-1, 3)).reshape((nsamples, nG, -1))
-    k = compute_group_map(xyz_rep)
-
-    SV = ovlp @ mo_coeff0
-    mo_rep_diag = np.zeros((nG, nao)) # diagonal of mo representation of G
-    ao_irrep_basis = np.zeros((nao, nao))
-    irrep_indicator = np.zeros((len(character), nao), dtype=bool)
-    counter = 0
+    aos = mol.eval_gto("GTOval_sph", gr.reshape(-1, 3)).reshape((nsamples, nG, nao))
+    groupmap = compute_group_map(xyz_rep)
 
     # each tag is invariant under G and has its own representation
     # search_ao_label(tag) gives the indices for that tag
-    Ssum = 0.
     tags = make_tags(ao_labels) # e.g. "H 2p"
+    return tags, aos, groupmap
+
+def id_mo_irreps(mol, xyz_rep, ovlp, mo_coeff0, character):
+    """
+    mol: the pyscf mol or cell
+    xyz_rep: group representation on R^3 (|G|, 3, 3)
+    character: character table (n_irrep, |G|)
+    mo_coeff0: starting/input MOs
+    ovlp: from mf.get_ovlp()
+    returns:
+        irrep_indicator (n_irrep, nao) boolean array indexing MOs
+    """
+    tags, aos, k = generate_tags_aos(mol, xyz_rep)
+    nao = len(ovlp)
+    nG = character.shape[1]
+    SV = ovlp @ mo_coeff0
+    mo_rep_diag = np.zeros((nG, nao)) # diagonal of mo representation of G
+    print("ovlp", ovlp.shape)
     for tag in tags:
         inds = mol.search_ao_label(tag)
         tag_ao_rep = _solve_coefficients(aos[:, :, inds], k)
@@ -87,33 +91,46 @@ def id_mo_irreps(mol, xyz_rep, character, mo_coeff0, ovlp):
         SVinds = SV[inds]
         mc0inds = mo_coeff0[inds]
         mo_rep_diag += np.einsum("im,gij,jm->gm", mc0inds.conj(), tag_ao_rep, SVinds)
+    dotprod = np.einsum("rg,gj->rj", character, mo_rep_diag) * character[:, :1]/ nG
+    irrep_indicator = dotprod > 1e-12
+
+    return irrep_indicator
+
+def id_ao_irreps(mol, xyz_rep, ovlp, mo_coeff0, character):
+    """
+    returns:
+        irrep_indicator (n_irrep, nao) boolean array indexing MOs
+        basis (nao, nao) columns are basis vectors
+    """
+    tags, aos, k = generate_tags_aos(mol, xyz_rep)
+    nao = len(ovlp)
+    print("ovlp", ovlp.shape)
+    ao_irrep_basis = np.zeros((nao, nao))
+    irrep_indicator = np.zeros((len(character), nao), dtype=bool)
+    for tag in tags:
+        inds = mol.search_ao_label(tag)
+        tag_ao_rep = _solve_coefficients(aos[:, :, inds], k)
         # For AO basis
         # project AO basis onto irreps. In AO basis, the elements are the identity matrix
         # projection P = \sum_g \chi_g C_g v; columns are the projected vectors in AO basis
         # Acting with the group elements is tag_ao_rep @ I = tag_ao_rep
         tag_ovlp = ovlp[inds][:, inds]
         dotprod = np.einsum("rg,gij,jk->rik", character, tag_ao_rep, tag_ovlp)
-        dotprod *= character[:, :1, np.newaxis]/ nG
+        dotprod *= character[:, :1, np.newaxis]/ character.shape[1]
         # projection will have zero eigenvalues, SVD to remove
-        # we don't want parameters in AO basis, want a good basis -> use U, discard V (Q: why not use V instead?)
+        # we don't want parameters in AO basis, want a good basis -> use U, discard V 
         U, S, Vh = np.linalg.svd(dotprod)
         select = S > 1e-8
-        print("S", S.sum())
-        Ssum += S.sum()
         tmp = ao_irrep_basis[inds]
         counter = 0
         for i, (u, sel) in enumerate(zip(U, select)): # for each irrep
-            print(tag, "u", np.linalg.norm(u[:, sel])**2, "z", inds[sel])
             sel_inds = inds[counter:counter+sel.sum()]
             counter += sel.sum()
             irrep_indicator[i, sel_inds] = 1
             tmp[:, sel_inds] = u[:, sel]
         ao_irrep_basis[inds] = tmp
-
-    # For MO basis
-    dotprod = np.einsum("rg,gj->rj", character, mo_rep_diag) * character[:, :1]/ nG
-    irrep_indicator = dotprod > 1e-12
-    # For AO basis
+    #T = np.linalg.inv(ovlp)
+    #ao_irrep_basis = T @ ao_irrep_basis
 
     return irrep_indicator, ao_irrep_basis
     
