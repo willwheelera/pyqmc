@@ -203,28 +203,59 @@ def make_tags(ao_labels):
     tags.sort()
     return tags
 
-def organize_block_diagonal(A):
+def organize_block_diagonal(A, tol=1e-2):
     # For a single matrix that is permuted block diagonal, permute the basis to make it block diagonal
+    from matplotlib.animation import ArtistAnimation 
+    import matplotlib.pyplot as plt
     B = A.copy()
     current_col = 0
     end_permutation = np.arange(len(A))
-    blocksizes = [0]
-    for i, row in enumerate(A):
-        permutation, current_col, blocksize = _arrange_row(B[i], current_col)
+    blocksizes = []
+    artists = []
+    #fig, ax = plt.subplots()
+    v = 2
+    #ax.imshow(B, vmax=v, vmin=-v, cmap="PRGn")
+    for i in range(len(A)):
+        newblock = np.all(np.abs(B[i, :current_col]) <tol)
+        current_col += newblock
+
+        permutation, current_col, blocksize = _arrange_row(B, i, current_col, tol)
+        blocksize += newblock
         B = B[permutation][:, permutation]
         end_permutation = end_permutation[permutation]
-        if np.all(B[i, :current_col] == 0):
+
+        #im = ax.imshow(B, vmax=v, vmin=-v, cmap="PRGn", animated=True)
+        #artists.append([im])
+
+        if blocksize==0 and newblock:
+            print("row", i)
+            print(B[i])
+            print(np.around(B[i], 2))
+            print(permutation)
+            print(B[permutation][:, permutation][i])
+            quit()
+        if newblock:
             blocksizes.append(blocksize)
         else:
             blocksizes[-1] += blocksize
+
+    #ani = ArtistAnimation(fig, artists, interval=200, blit=True, repeat_delay=1000)
+    #plt.show()
+
     return B, end_permutation, blocksizes
 
-def _arrange_row(row, aftercol):
-    v = row[aftercol:]
+def _arrange_row(B, i, aftercol, tol=1e-10):
+    r = B[i, aftercol:]
+    c = B[aftercol:, i]
+    r = np.abs(r) > tol
+    c = np.abs(c) > tol
+    v = np.logical_or(r, c)
+
     nonzero = np.nonzero(v)[0] + aftercol
     zero = np.nonzero(v==0)[0] + aftercol
     before = np.arange(aftercol)
-    return np.concatenate([before, nonzero, zero]), aftercol + len(nonzero), len(nonzero)
+    n = len(nonzero)
+    return np.concatenate([before, nonzero, zero]), aftercol + n, n
 
 ###########################################################
 def test_irrep_indicator(mol, mo_coeff, irrep_indicator, xyz_rep):
